@@ -1,0 +1,70 @@
+{
+	"$schema": "https://json.schemastore.org/package.json",
+	"name": "pi-actualyze",
+	"version": "0.1.0",
+	"description": "Native Actualyze model provider for pi with automatic model discovery",
+	"license": "MIT",
+	"author": "Actualyze AI, Inc.",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/actualyze-ai/pi-actualyze.git"
+	},
+	"type": "module",
+	"files": [
+		"src",
+		"README.md"
+	],
+	"scripts": {
+		"prepare": "node --input-type=module -e \"try { (await import('husky')).default() } catch (e) { if (e?.code !== 'ERR_MODULE_NOT_FOUND') throw e }\"",
+		"clean": "rm -rf dist coverage",
+		"typecheck": "tsc --noEmit",
+		"lint": "biome check src test",
+		"format": "biome format --write .",
+		"format:check": "biome format .",
+		"test": "vitest run --exclude test/live.test.ts",
+		"test:live": "ACTUALYZE_LIVE_TEST=1 vitest run test/live.test.ts",
+		"build": "npm run clean && tsc -p tsconfig.build.json",
+		"pack:check": "npm pack --dry-run",
+		"check": "npm run typecheck && npm run lint && npm run format:check && npm test && npm run build && npm run pack:check"
+	},
+	"lint-staged": {
+		"*.ts": [
+			"biome check --write --no-errors-on-unmatched"
+		],
+		"*.{json,jsonc,md}": [
+			"biome format --write --no-errors-on-unmatched"
+		]
+	},
+	"keywords": [
+		"pi-package",
+		"pi",
+		"actualyze",
+		"llm",
+		"model-provider"
+	],
+	"engines": {
+		"node": ">=22.19.0"
+	},
+	"peerDependencies": {
+		"@earendil-works/pi-ai": ">=0.84.2",
+		"@earendil-works/pi-coding-agent": ">=0.84.2"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "2.3.5",
+		"@earendil-works/pi-ai": "0.84.2",
+		"@earendil-works/pi-coding-agent": "0.84.2",
+		"@types/node": "22.19.19",
+		"husky": "9.1.7",
+		"lint-staged": "16.4.0",
+		"typescript": "5.9.3",
+		"vitest": "4.1.11"
+	},
+	"pi": {
+		"extensions": [
+			"./src/index.ts"
+		]
+	},
+	"publishConfig": {
+		"access": "public"
+	}
+}

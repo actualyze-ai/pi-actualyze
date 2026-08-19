@@ -1,0 +1,10 @@
+export const ACTUALYZE_PROVIDER_ID = "actualyze";
+export const ACTUALYZE_PROVIDER_NAME = "Actualyze";
+export const ACTUALYZE_TARGET_ENV = "ACTUALYZE_TARGET";
+export const ACTUALYZE_API_KEY_ENV = "ACTUALYZE_API_KEY";
+export const ACTUALYZE_API_PATH = "/openai/v1";
+export const DEFAULT_CONTEXT_WINDOW = 128_000;
+export const DEFAULT_MAX_TOKENS = 16_384;
+export const DEFAULT_REQUEST_BUDGET_MS = 10_000;
+export const DEFAULT_MAX_RESPONSE_BYTES = 5 * 1024 * 1024;
+export const MAX_MODEL_ID_LENGTH = 512;
