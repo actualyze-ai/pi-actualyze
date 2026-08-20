@@ -31,12 +31,14 @@ pi --no-extensions -e .
 
 ## Development workflow
 
-| Where                           | What runs                                                                        |
-| ------------------------------- | -------------------------------------------------------------------------------- |
-| `pre-commit` hook               | Biome lint/format on staged files (lint-staged)                                  |
-| `pre-push` hook                 | `npm run check`                                                                  |
-| CI (`.github/workflows/ci.yml`) | `npm ci` + `npm run check` on pushes to `main` and pull requests, Node 22 and 24 |
-| Never automatically             | Live tests (`npm run test:live`), which spend real credentials and money         |
+| Where               | What runs                                                                            |
+| ------------------- | ------------------------------------------------------------------------------------ |
+| `pre-commit` hook   | Biome lint/format on staged files (lint-staged)                                      |
+| `pre-push` hook     | `npm run check`                                                                      |
+| CI (`ci.yml`)       | `npm ci` + `npm run check` on pull requests, Node 22 and 24                          |
+| CI (`latest.yml`)   | `npm run check` on pushes to `main`, then a rolling `latest` prerelease              |
+| CI (`release.yml`)  | On `v*` tags: `npm run check`, npm publish (OIDC trusted publishing), GitHub release |
+| Never automatically | Live tests (`npm run test:live`), which spend real credentials and money             |
 
 ## Architecture
 

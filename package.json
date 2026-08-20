@@ -1,7 +1,7 @@
 {
 	"$schema": "https://json.schemastore.org/package.json",
 	"name": "pi-actualyze",
-	"version": "0.1.0",
+	"version": "1.0.0",
 	"description": "Native Actualyze model provider for pi with automatic model discovery",
 	"license": "MIT",
 	"author": "Actualyze AI, Inc.",
@@ -65,6 +65,7 @@
 		]
 	},
 	"publishConfig": {
-		"access": "public"
+		"access": "public",
+		"provenance": true
 	}
 }

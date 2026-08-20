@@ -1,6 +1,7 @@
 # pi-actualyze
 
 [![CI](https://github.com/actualyze-ai/pi-actualyze/actions/workflows/ci.yml/badge.svg)](https://github.com/actualyze-ai/pi-actualyze/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/pi-actualyze.svg)](https://www.npmjs.com/package/pi-actualyze)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 [![Node.js >= 22.19](https://img.shields.io/badge/Node.js-%3E%3D22.19-brightgreen.svg)](https://nodejs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-strict-blue.svg)](./tsconfig.json)
@@ -138,14 +139,17 @@ pi --no-extensions -e .
 
 ### npm
 
-The package is not currently published to npm. After publication, pi's normal npm
-package syntax will be:
+Install the published package:
 
 ```bash
 pi install npm:pi-actualyze
 ```
 
-Do not rely on that command until an npm release is announced.
+To pin a version:
+
+```bash
+pi install npm:pi-actualyze@1.0.0
+```
 
 ### Requirements
 
@@ -563,11 +567,9 @@ response captures are excluded.
 ## Project Status
 
 The provider implementation, offline suite, package-loading integration, live catalog
-parity check, and live streamed tool loop have been completed. Remaining release
-decisions are intentionally not guessed:
-
-- authoritative currency and units for Actualyze's advertised pricing; and
-- npm publication workflow.
+parity check, and live streamed tool loop have been completed. One release decision
+is intentionally not guessed: authoritative currency and units for Actualyze's
+advertised pricing.
 
 Conservative OpenAI compatibility flags remain disabled until live evidence supports
 promoting them.
