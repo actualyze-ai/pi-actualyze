@@ -14,10 +14,10 @@ IDs, or per-model configuration required.
 
 ## Quick Start
 
-Install directly from GitHub:
+Install from npm:
 
 ```bash
-pi install git:github.com/actualyze-ai/pi-actualyze
+pi install npm:pi-actualyze
 ```
 
 Start pi and authenticate:
@@ -92,9 +92,27 @@ The provider owns the complete lifecycle:
 
 ## Installation
 
+### npm (recommended)
+
+```bash
+pi install npm:pi-actualyze
+```
+
+To pin a version:
+
+```bash
+pi install npm:pi-actualyze@1.0.0
+```
+
+Uninstall with:
+
+```bash
+pi remove npm:pi-actualyze
+```
+
 ### GitHub
 
-Install the current repository through pi's package manager:
+To track the repository directly instead of npm releases:
 
 ```bash
 pi install git:github.com/actualyze-ai/pi-actualyze
@@ -112,9 +130,6 @@ unpinned package installations and `pi remove` to uninstall:
 ```bash
 pi remove git:github.com/actualyze-ai/pi-actualyze
 ```
-
-> The repository is currently private. GitHub access must already be configured
-> for the account running pi.
 
 ### Local checkout
 
@@ -135,20 +150,6 @@ To try the extension for one process without changing pi settings:
 
 ```bash
 pi --no-extensions -e .
-```
-
-### npm
-
-Install the published package:
-
-```bash
-pi install npm:pi-actualyze
-```
-
-To pin a version:
-
-```bash
-pi install npm:pi-actualyze@1.0.0
 ```
 
 ### Requirements
