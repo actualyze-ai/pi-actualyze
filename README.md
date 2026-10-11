@@ -99,7 +99,7 @@ pi install npm:pi-actualyze
 To pin a version:
 
 ```bash
-pi install npm:pi-actualyze@1.0.0
+pi install npm:pi-actualyze@1.1.0
 ```
 
 Uninstall with:
