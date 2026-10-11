@@ -45,15 +45,15 @@ pi --no-extensions -e .
 The package registers one dynamic `Provider<"openai-completions">` with pi.
 Six small modules under `src/`:
 
-| Module         | Responsibility                                               |
-| -------------- | ------------------------------------------------------------ |
-| `constants.ts` | Provider ID, env var names, sentinel limits, budgets         |
-| `endpoint.ts`  | Target-label validation and canonical base URL construction  |
-| `transport.ts` | Guarded fetch, retries, deadlines, bounded reads, redaction  |
-| `catalog.ts`   | Fail-closed `/models` parsing and model conversion           |
-| `client.ts`    | Thin composition: guarded fetch + `getJson` + `parseCatalog` |
-| `provider.ts`  | Auth hooks, refresh lifecycle, catalog state, stream guards  |
-| `index.ts`     | Extension entry point: `pi.registerProvider(...)`            |
+| Module         | Responsibility                                                    |
+| -------------- | ----------------------------------------------------------------- |
+| `constants.ts` | Provider ID, env var and flag names, default target, limits       |
+| `endpoint.ts`  | Target-label validation and canonical base URL construction       |
+| `transport.ts` | Guarded fetch, retries, deadlines, bounded reads, redaction       |
+| `catalog.ts`   | Fail-closed `/models` parsing and model conversion                |
+| `client.ts`    | Thin composition: guarded fetch + `getJson` + `parseCatalog`      |
+| `provider.ts`  | Auth hooks, refresh lifecycle, catalog state, stream guards       |
+| `index.ts`     | Extension entry: `--actualyze-target` flag, provider registration |
 
 Data flow for a catalog refresh:
 
@@ -69,6 +69,10 @@ flowchart LR
 
 Key behaviors, each backed by tests:
 
+- **Production by default** (`provider.ts`): login prompts only for the API
+  key. When no stored credential pins a target, it comes from the
+  `--actualyze-target` flag, then `ACTUALYZE_TARGET`, then `app`. Login never
+  asks for a target.
 - **Endpoint validation** (`endpoint.ts`): the target is exactly one ASCII
   DNS label. The base URL is always
   `https://<target>.actualyze.ai/openai/v1`. Test-only endpoints are
@@ -95,16 +99,32 @@ Key behaviors, each backed by tests:
 
 ## Subtleties worth knowing before you edit `provider.ts`
 
-These took several review rounds to get right. Understand them before
-changing the refresh or auth code.
+Understand these before changing the refresh or auth code.
 
 **pi refreshes in two phases.** Phase 1 is cache-only and runs with the
 _stored_ credential, which is `undefined` for users configured purely via
 environment variables. Phase 2 resolves auth (calling the provider's
 `resolve()`) and allows network. `refreshConfiguration` therefore resolves
-field by field: stored credential first, then `process.env`, then the last
-resolved configuration. Without the env fallback, ambient-only users would
-never restore a cached catalog offline.
+field by field: stored credential first, then the ambient sources (the
+`--actualyze-target` flag and `process.env`, with the target defaulting to
+`app`), then the last resolved configuration. Without the env fallback,
+ambient-only users would never restore a cached catalog offline.
+
+**Read the target flag lazily.** pi parses extension flags after the
+extension factory returns, so `index.ts` passes a getter, not a value, and
+the provider calls it on every login, check, resolve, and refresh. pi also
+runs its startup cache-only refresh before it applies flag values, so while
+`getFlag()` is still undefined the getter falls back to pi's own `parseArgs`
+over `process.argv`. Without that fallback, a key-only environment started
+with `--actualyze-target` would resolve `app` at startup and delete the
+selected target's cached catalog. The getter also catches `getFlag()`
+throwing on a stale extension runtime (after `/reload`), because the old
+provider can stay registered and its `check()` must not throw.
+
+The fallback reads the CLI's argv, so it does not see flag values that an
+SDK host passes through `extensionFlagValues`; those still arrive after the
+startup refresh. SDK hosts should select a target with `ACTUALYZE_TARGET` or
+the `target` option of `createActualyzeProvider` instead.
 
 **`check()` must never throw.** pi runs every provider's availability check
 in one `Promise.all`; a single throwing `check()` blanks the model picker
@@ -144,15 +164,12 @@ superseded refresh belongs inside `update`, not before the publish call.
   completes, printing no dynamic models. Interactive `/model` is reliable.
 - **Costs are always zero.** This is an unknown-price sentinel, not free
   inference. Actualyze advertises `cost.input`, `cost.output`,
-  `cost.cache_read`, and `cost.cache_write`, but the API response does not
-  declare currency or units, and pi interprets cost fields as USD per
-  million tokens. Once Actualyze confirms the units, promote the mapping
-  (`input`→`input`, `output`→`output`, `cache_read`→`cacheRead`,
-  `cache_write`→`cacheWrite`) in one tested change; promoted values must
-  be finite and non-negative, and a missing rate stays zero.
+  `cost.cache_read`, and `cost.cache_write` without declaring currency or
+  units, and pi interprets cost fields as USD per million tokens.
 - **Advisory capability flags.** `streaming: false` and `tool_use: false`
-  in the Actualyze catalog are advisory; a sampled `streaming: false` model
-  streamed successfully. Models are never filtered on these flags.
+  in the Actualyze catalog are advisory. Models are never filtered on these
+  flags; a model-specific incompatibility belongs in an explicit
+  compatibility rule, not a catalog filter.
 - **`models.json` entries are not supported.** Manually defined Actualyze
   models are refused by the stream guard because the provider's discovered
   catalog is authoritative.
@@ -178,8 +195,8 @@ npm run test:live   # explicit, credential-gated live tests
 Tests derive from decision logic and error paths, not coverage targets.
 `test/models-lifecycle.test.ts` drives pi's real `ModelRuntime` rather than
 hand-rolled contexts; prefer that pattern for lifecycle behavior, because
-several bugs (auth rewrite bypassing the stream guard, two-phase refresh
-ordering) were only reachable through the real runtime. The offline suite
+some behavior (pi rewriting auth before `stream()`, two-phase refresh
+ordering) is only reachable through the real runtime. The offline suite
 must stay hermetic: `test/setup.ts` clears ambient `ACTUALYZE_*` variables
 so a developer's exported live credentials cannot leak into assertions.
 

@@ -8,8 +8,8 @@
 
 A native [pi](https://github.com/earendil-works/pi) provider package for
 [Actualyze](https://actualyze.ai), the AI platform built by Actualyze AI.
-Configure one Actualyze target and API key, and the provider discovers every
-model advertised by that target automatically. No `models.json`, copied model
+Log in with an Actualyze API key, and the provider discovers every model
+advertised by Actualyze automatically. No `models.json`, copied model
 IDs, or per-model configuration required.
 
 ## Quick Start
@@ -26,10 +26,8 @@ Start pi and authenticate:
 /login actualyze
 ```
 
-Enter:
-
-1. your Actualyze target label, the `foo` in `https://foo.actualyze.ai`; and
-2. the API key issued for that target.
+Enter your Actualyze API key when asked. Login connects to the production
+endpoint, `https://app.actualyze.ai`, and does not ask about environments.
 
 Login validates the credentials, downloads the complete model catalog, and makes
 the discovered models available immediately. Open pi's model selector:
@@ -49,8 +47,8 @@ users to copy each model into `models.json` would also duplicate metadata that t
 Actualyze API already publishes, including context limits, output limits,
 modalities, reasoning support, and caching information.
 
-**pi-actualyze** makes Actualyze a native dynamic pi provider. The target and API
-key are the only user configuration. The package queries Actualyze directly,
+**pi-actualyze** makes Actualyze a native dynamic pi provider. The API key is the
+only user configuration. The package queries Actualyze directly,
 validates the complete catalog as one atomic generation, converts every valid
 entry into a pi model, and routes inference through pi's native OpenAI Chat
 Completions implementation.
@@ -59,9 +57,9 @@ Completions implementation.
 
 The provider owns the complete lifecycle:
 
-1. **Configuration:** `/login actualyze` asks for a target label and API key.
-   The label is converted to the fixed endpoint
-   `https://<target>.actualyze.ai/openai/v1`.
+1. **Configuration:** `/login actualyze` asks only for an API key. The target
+   defaults to production (`app`), and a target label always maps to the fixed
+   endpoint `https://<target>.actualyze.ai/openai/v1`.
 
 2. **Credential validation:** Before pi saves anything, the provider sends an
    authenticated `GET /models` request through a guarded transport. Invalid
@@ -156,7 +154,7 @@ pi --no-extensions -e .
 
 - pi `0.84.2` or newer
 - Node.js `22.19.0` or newer for development
-- Network access to the configured `*.actualyze.ai` target
+- Network access to `app.actualyze.ai` (or the selected `*.actualyze.ai` target)
 - An Actualyze API key valid for that target
 
 ## Configuration
@@ -169,41 +167,69 @@ Run:
 /login actualyze
 ```
 
-The flow asks for two values:
-
-| Value   | Example    | Meaning                                  |
-| ------- | ---------- | ---------------------------------------- |
-| Target  | `customer` | One DNS label, not a hostname or URL     |
-| API key | `…`        | Bearer credential issued for that target |
-
-The target `customer` resolves only to:
+The flow asks for one value, your API key. The prompt names the host it will
+authenticate against:
 
 ```text
-https://customer.actualyze.ai/openai/v1
+Actualyze API key for app.actualyze.ai
+```
+
+Login fetches and validates the catalog before returning the credential to pi. A
+failed validation stores nothing.
+
+### Selecting Another Environment
+
+Most users never need this section. To use a target other than production,
+select it before logging in with either the `--actualyze-target` flag or the
+`ACTUALYZE_TARGET` environment variable:
+
+```bash
+pi --actualyze-target staging
+```
+
+```text
+/login actualyze
+```
+
+The target is resolved in this order:
+
+| Priority | Source                    | Example                         |
+| -------- | ------------------------- | ------------------------------- |
+| 1        | Saved credential's target | set by the last `/login`        |
+| 2        | `--actualyze-target` flag | `pi --actualyze-target staging` |
+| 3        | `ACTUALYZE_TARGET`        | `ACTUALYZE_TARGET=staging pi`   |
+| 4        | Default                   | `app`                           |
+
+At login there is no saved credential yet, so the flag, the environment
+variable, or the default decides. A saved credential keeps the target it was
+created with; to move a saved login to another environment, start pi with the
+flag and run `/login actualyze` again.
+
+The target `staging` resolves only to:
+
+```text
+https://staging.actualyze.ai/openai/v1
 ```
 
 Target labels may contain ASCII letters, digits, and internal hyphens. The
 provider rejects dots, schemes, paths, ports, whitespace, Unicode lookalikes,
 control characters, and labels longer than 63 characters. Uppercase ASCII letters
-are normalized to lowercase.
-
-Login fetches and validates the catalog before returning the credential to pi. A
-failed validation stores nothing.
+are normalized to lowercase. Login rejects an invalid label before asking for
+the API key.
 
 ### Environment Configuration
 
-For non-interactive authentication, set both variables before starting pi:
+For non-interactive authentication, set the API key before starting pi:
 
 ```bash
-export ACTUALYZE_TARGET=customer
 export ACTUALYZE_API_KEY='your-api-key'
 pi
 ```
 
-| Variable            | Required | Description             |
-| ------------------- | -------- | ----------------------- |
-| `ACTUALYZE_TARGET`  | Yes      | One Actualyze DNS label |
-| `ACTUALYZE_API_KEY` | Yes      | API key for that target |
+| Variable            | Required | Description                                                            |
+| ------------------- | -------- | ---------------------------------------------------------------------- |
+| `ACTUALYZE_API_KEY` | Yes      | API key for the target                                                 |
+| `ACTUALYZE_TARGET`  | No       | Non-production DNS label; defaults to `app`; `--actualyze-target` wins |
 
 Stored credential fields take precedence over the corresponding environment
 variables. Invalid ambient configuration is treated as unavailable authentication.
@@ -222,7 +248,7 @@ non-secret target in credential metadata:
   "type": "api_key",
   "key": "<secret>",
   "env": {
-    "ACTUALYZE_TARGET": "customer"
+    "ACTUALYZE_TARGET": "app"
   }
 }
 ```
@@ -260,9 +286,9 @@ A new generation is rejected atomically when:
   or bidirectional control characters; or
 - required catalog structure cannot be represented safely.
 
-Individual model-detail requests are not part of the version-1 critical path. The
-live list endpoint already advertises the metadata needed by pi, and one list
-request keeps refresh within pi's interactive deadline.
+The provider does not request individual model details. The list endpoint already
+advertises the metadata pi needs, and a single request keeps refresh within pi's
+interactive deadline.
 
 ### Refresh and Cache Behavior
 
@@ -290,7 +316,7 @@ Actualyze model advertisements are mapped into pi as follows:
 | `modalities.input` includes `image` | `input`         | Enables image input                         |
 | `capabilities.thinking`             | `reasoning`     | Enables reasoning when true                 |
 | `capabilities.thinking_adaptive`    | `reasoning`     | Also enables reasoning when true            |
-| `cost.*`                            | `cost`          | Currently represented as unknown; see below |
+| `cost.*`                            | `cost`          | Represented as unknown; see below           |
 
 ### Missing Limits
 
@@ -305,31 +331,25 @@ upstream limit.
 
 ### Pricing
 
-Actualyze currently advertises numeric cost fields, but the inspected API response
-does not declare their currency or units. Pi interprets cost fields specifically as
-USD per million tokens, so pi-actualyze does not guess.
+Actualyze advertises numeric cost fields but does not declare their currency or
+units. Pi interprets cost fields as USD per million tokens, so the provider does
+not map them.
 
-All cost fields currently use `0` as an **unknown-price sentinel**. Zero does not
-mean inference is free. Advertised pricing will be mapped only after Actualyze's
-currency and units are authoritatively confirmed.
+All cost fields use `0` as an **unknown-price sentinel**. Zero does not mean
+inference is free.
 
 ### Modalities
 
-Pi currently represents text and image input metadata. Actualyze advertisements
+Pi represents text and image input metadata. Actualyze advertisements
 for PDF/document, audio, or video input are not converted to another modality and
 are not presented as supported by this provider.
 
 ### Advisory Capability Flags
 
-Actualyze's `streaming` and `tool_use` flags are treated as advisory:
-
-- at least one live model advertising `streaming: false` successfully streamed;
-- pi has no per-model tool-support metadata field; and
-- advisory false values never remove a model from the discovered catalog.
-
-The provider therefore keeps all valid models visible and uses the native pi request
-shape consistently. Proven model-specific incompatibilities should become explicit
-compatibility rules rather than hidden catalog filters.
+Actualyze's `streaming` and `tool_use` flags are treated as advisory. A `false`
+value never removes a model from the discovered catalog, and pi has no per-model
+tool-support field. The provider keeps every valid model visible and uses the same
+native pi request shape for all of them.
 
 ## OpenAI Compatibility
 
@@ -356,7 +376,7 @@ messages matching pi's standard patterns retain pi's normal compaction behavior.
 
 Authenticated traffic is deliberately constrained:
 
-- production targets are one validated ASCII DNS label;
+- targets are one validated ASCII DNS label;
 - all requests must use HTTPS;
 - the origin must exactly match the configured target;
 - paths must remain beneath `/openai/v1`;
@@ -400,13 +420,14 @@ The provider is designed to fail without corrupting a valid catalog:
 
 ## pi Commands and CLI Behavior
 
-| Command             | Purpose                                                     |
-| ------------------- | ----------------------------------------------------------- |
-| `/login actualyze`  | Configure target and API key, validate, and discover models |
-| `/model`            | Browse and select discovered Actualyze models               |
-| `/logout actualyze` | Remove the stored Actualyze credential                      |
-| `pi list`           | Show installed pi packages                                  |
-| `pi remove …`       | Uninstall the package                                       |
+| Command              | Purpose                                            |
+| -------------------- | -------------------------------------------------- |
+| `/login actualyze`   | Enter an API key, validate it, and discover models |
+| `/model`             | Browse and select discovered Actualyze models      |
+| `/logout actualyze`  | Remove the stored Actualyze credential             |
+| `--actualyze-target` | CLI flag selecting a non-production target         |
+| `pi list`            | Show installed pi packages                         |
+| `pi remove …`        | Uninstall the package                              |
 
 ### `--list-models` Caveat
 
@@ -436,10 +457,7 @@ pi list
 pi --version
 ```
 
-The package requires pi 0.84.2 or newer. Local development must use the
-loader-compatible `@earendil-works/pi-ai/compat` entrypoint; current source already
-does this. Update the checkout and restart pi if an older commit reports a missing
-`openai-completions.lazy` module.
+The package requires pi 0.84.2 or newer.
 
 ### `actualyze` does not appear in `/login`
 
@@ -458,20 +476,22 @@ pi install /absolute/path/to/pi-actualyze
 
 ### Login rejects the target
 
-Enter only the DNS label:
+Login never asks for a target, so this only happens when `--actualyze-target` or
+`ACTUALYZE_TARGET` holds an invalid value. Pass only the DNS label:
 
-```text
-customer
+```bash
+pi --actualyze-target staging
 ```
 
-Do not enter `customer.actualyze.ai`, `https://customer.actualyze.ai`, a port, path,
-or surrounding whitespace.
+Do not pass `staging.actualyze.ai`, `https://staging.actualyze.ai`, a port, path,
+or surrounding whitespace. Unset both to use production.
 
 ### Login returns an authentication or catalog error
 
 Check that:
 
-- the API key belongs to the selected target;
+- the API key belongs to the selected target (production unless you chose
+  another one);
 - the target can reach `https://<target>.actualyze.ai/openai/v1/models`;
 - a proxy is not returning HTML or a redirect; and
 - the endpoint returns a complete OpenAI-style JSON model list.
@@ -521,7 +541,7 @@ Live tests never run through `npm test` or `npm run check`.
 Catalog-only parity check:
 
 ```bash
-ACTUALYZE_TARGET=customer \
+ACTUALYZE_TARGET=app \
 ACTUALYZE_API_KEY='...' \
 npm run test:live
 ```
@@ -529,20 +549,20 @@ npm run test:live
 Paid streamed tool-loop check:
 
 ```bash
-ACTUALYZE_TARGET=customer \
+ACTUALYZE_TARGET=app \
 ACTUALYZE_API_KEY='...' \
 ACTUALYZE_LIVE_INFERENCE=1 \
-ACTUALYZE_LIVE_MODEL='budget-models' \
+ACTUALYZE_LIVE_MODEL='<model-id>' \
 npm run test:live
 ```
 
 Optional advisory-capability model:
 
 ```bash
-ACTUALYZE_TARGET=customer \
+ACTUALYZE_TARGET=app \
 ACTUALYZE_API_KEY='...' \
 ACTUALYZE_LIVE_INFERENCE=1 \
-ACTUALYZE_LIVE_ADVISORY_MODEL='fugu' \
+ACTUALYZE_LIVE_ADVISORY_MODEL='<model-id>' \
 npm run test:live
 ```
 
@@ -562,18 +582,7 @@ The npm file allowlist contains only:
 - `README.md`
 - `LICENSE` and npm-generated package metadata
 
-Tests, `.env.example`, `.pi/` reports, credentials, build output, coverage, and live
-response captures are excluded.
-
-## Project Status
-
-The provider implementation, offline suite, package-loading integration, live catalog
-parity check, and live streamed tool loop have been completed. One release decision
-is intentionally not guessed: authoritative currency and units for Actualyze's
-advertised pricing.
-
-Conservative OpenAI compatibility flags remain disabled until live evidence supports
-promoting them.
+Tests, `.env.example`, credentials, build output, and coverage are excluded.
 
 ## Contributing
 

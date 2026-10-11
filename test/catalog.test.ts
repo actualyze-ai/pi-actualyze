@@ -139,7 +139,7 @@ describe("Actualyze catalog conversion", () => {
 		expect(String(error)).not.toContain(secretShapedId);
 	});
 
-	it("preserves parity for a redacted representative 34-entry catalog", () => {
+	it("preserves parity for a representative 34-entry catalog", () => {
 		const models = parseCatalog(representativeCatalog, baseUrl);
 		expect(models).toHaveLength(34);
 		expect(models.map((model) => model.id)).toEqual(representativeCatalog.data.map((entry) => entry.id));

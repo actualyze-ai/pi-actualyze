@@ -11,11 +11,18 @@ import { openAICompletionsApi } from "@earendil-works/pi-ai/compat";
 import { ActualyzeClient, type ActualyzeClientOptions } from "./client.js";
 import {
 	ACTUALYZE_API_KEY_ENV,
+	ACTUALYZE_DEFAULT_TARGET,
 	ACTUALYZE_PROVIDER_ID,
 	ACTUALYZE_PROVIDER_NAME,
 	ACTUALYZE_TARGET_ENV,
 } from "./constants.js";
-import { ActualyzeConfigurationError, actualyzeBaseUrl, normalizeTarget, validateApiKey } from "./endpoint.js";
+import {
+	ActualyzeConfigurationError,
+	actualyzeBaseUrl,
+	actualyzeHost,
+	normalizeTarget,
+	validateApiKey,
+} from "./endpoint.js";
 import { createGuardedFetch } from "./transport.js";
 
 interface ResolvedConfiguration {
@@ -30,7 +37,15 @@ interface PendingLoginCatalog {
 	models: readonly Model<"openai-completions">[];
 }
 
-export interface ActualyzeProviderOptions extends ActualyzeClientOptions {}
+export interface ActualyzeProviderOptions extends ActualyzeClientOptions {
+	/**
+	 * Explicit target selection, such as the `--actualyze-target` CLI flag.
+	 * Read lazily on every resolution because pi parses extension flags after
+	 * the extension factory runs. Takes precedence over `ACTUALYZE_TARGET`;
+	 * a stored credential's target still wins over both.
+	 */
+	target?: () => string | undefined;
+}
 
 export interface ActualyzeProviderController {
 	provider: Provider<"openai-completions">;
@@ -42,15 +57,29 @@ function credentialValue(credential: ApiKeyCredential | undefined, name: string)
 	return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
+/**
+ * The target used when no stored credential pins one: the explicit selection
+ * (CLI flag), then `ACTUALYZE_TARGET`, then production. Empty values count as
+ * unset so `ACTUALYZE_TARGET=` falls through to production.
+ */
+function ambientTarget(selected: string | undefined, envTarget: string | undefined): string {
+	return selected || envTarget || ACTUALYZE_DEFAULT_TARGET;
+}
+
+function configurationSource(storedTarget: string | undefined, storedKey: string | undefined): string {
+	return storedTarget || storedKey ? "stored credential" : ACTUALYZE_API_KEY_ENV;
+}
+
 async function resolveConfiguration(
 	ctx: AuthContext,
 	credential: ApiKeyCredential | undefined,
+	selectedTarget: string | undefined,
 ): Promise<ResolvedConfiguration | undefined> {
 	const storedTarget = credentialValue(credential, ACTUALYZE_TARGET_ENV);
-	const rawTarget = storedTarget ?? (await ctx.env(ACTUALYZE_TARGET_ENV));
+	const rawTarget = storedTarget ?? ambientTarget(selectedTarget, await ctx.env(ACTUALYZE_TARGET_ENV));
 	const storedKey = credential?.key;
 	const rawKey = storedKey ?? (await ctx.env(ACTUALYZE_API_KEY_ENV));
-	if (!rawTarget || !rawKey) return undefined;
+	if (!rawKey) return undefined;
 	let target: string;
 	try {
 		target = normalizeTarget(rawTarget);
@@ -71,7 +100,7 @@ async function resolveConfiguration(
 		target,
 		apiKey,
 		baseUrl: actualyzeBaseUrl(target),
-		source: storedTarget || storedKey ? "stored credential" : `${ACTUALYZE_TARGET_ENV} and ${ACTUALYZE_API_KEY_ENV}`,
+		source: configurationSource(storedTarget, storedKey),
 	};
 }
 
@@ -79,26 +108,29 @@ function isRestorableModel(model: Model<Api>, baseUrl: string): model is Model<"
 	return model.provider === ACTUALYZE_PROVIDER_ID && model.api === "openai-completions" && model.baseUrl === baseUrl;
 }
 
-function refreshConfiguration(credential: ApiKeyCredential | undefined): ResolvedConfiguration | undefined {
+function refreshConfiguration(
+	credential: ApiKeyCredential | undefined,
+	selectedTarget: string | undefined,
+): ResolvedConfiguration | undefined {
 	// Field-by-field precedence, mirroring resolveConfiguration: each stored
 	// field wins over its ambient counterpart independently. refreshModels has
-	// no AuthContext, so ambient values come from process.env (the login prompt
-	// reads process.env directly for the same reason). Validation here is
+	// no AuthContext, so ambient values come from process.env (login reads
+	// process.env directly for the same reason). Validation here is
 	// non-throwing: corrupt stored fields still surface via resolve() throwing
 	// in pi's phase-2 network refresh, so the lastResolvedConfiguration
 	// fallback in the caller only affects cache-only restore.
 	const storedTarget = credentialValue(credential, ACTUALYZE_TARGET_ENV);
-	const rawTarget = storedTarget ?? process.env[ACTUALYZE_TARGET_ENV];
+	const rawTarget = storedTarget ?? ambientTarget(selectedTarget, process.env[ACTUALYZE_TARGET_ENV]);
 	const storedKey = credential?.key;
 	const rawKey = storedKey ?? process.env[ACTUALYZE_API_KEY_ENV];
-	if (!rawTarget || !rawKey) return undefined;
+	if (!rawKey) return undefined;
 	try {
 		const target = normalizeTarget(rawTarget);
 		return {
 			target,
 			apiKey: validateApiKey(rawKey),
 			baseUrl: actualyzeBaseUrl(target),
-			source: storedTarget || storedKey ? "stored credential" : `${ACTUALYZE_TARGET_ENV} and ${ACTUALYZE_API_KEY_ENV}`,
+			source: configurationSource(storedTarget, storedKey),
 		};
 	} catch {
 		return undefined;
@@ -117,6 +149,7 @@ export function createActualyzeProvider(options: ActualyzeProviderOptions = {}):
 	let pendingLoginCatalog: PendingLoginCatalog | undefined;
 	const streams = openAICompletionsApi();
 	const underlyingFetch = options.fetch ?? globalThis.fetch;
+	const selectedTarget = (): string | undefined => options.target?.();
 
 	const installCatalog = (catalog: readonly Model<"openai-completions">[]): void => {
 		models = catalog;
@@ -128,10 +161,9 @@ export function createActualyzeProvider(options: ActualyzeProviderOptions = {}):
 			throw new Error("Refusing Actualyze request for a model from another target");
 		}
 		if (models.length > 0 && !catalogEntry) {
-			// The id is remote-origin (it came through parseCatalog at some point),
-			// but validateModelId already rejected control/bidi characters and
-			// bounded its length, and JSON.stringify escapes what remains —
-			// unlike the catalog parser context, this id has passed validation.
+			// The id came from the catalog, so validateModelId has already
+			// rejected control and bidi characters and bounded its length;
+			// JSON.stringify escapes the rest for the error message.
 			throw new Error(
 				`Refusing Actualyze request for ${JSON.stringify(model.id)}: it is not in the discovered catalog for the active target`,
 			);
@@ -145,17 +177,14 @@ export function createActualyzeProvider(options: ActualyzeProviderOptions = {}):
 			apiKey: {
 				name: "Actualyze API key",
 				login: async (interaction): Promise<ApiKeyCredential> => {
-					const enteredTarget = await interaction.prompt({
-						type: "text",
-						message: "Actualyze target",
-						placeholder: process.env[ACTUALYZE_TARGET_ENV] ?? "customer",
-					});
-					const target = normalizeTarget(
-						enteredTarget === "" ? process.env[ACTUALYZE_TARGET_ENV] || "" : enteredTarget,
-					);
+					// Login does not prompt for a target: it uses production unless
+					// --actualyze-target or ACTUALYZE_TARGET selects another one.
+					// Validate first so an invalid selection fails before the key
+					// prompt.
+					const target = normalizeTarget(ambientTarget(selectedTarget(), process.env[ACTUALYZE_TARGET_ENV]));
 					const enteredKey = await interaction.prompt({
 						type: "secret",
-						message: "Actualyze API key",
+						message: `Actualyze API key for ${actualyzeHost(target)}`,
 					});
 					const apiKey = validateApiKey(enteredKey);
 					const baseUrl = actualyzeBaseUrl(target);
@@ -178,7 +207,7 @@ export function createActualyzeProvider(options: ActualyzeProviderOptions = {}):
 				check: async ({ ctx, credential }) => {
 					let configuration: ResolvedConfiguration | undefined;
 					try {
-						configuration = await resolveConfiguration(ctx, credential);
+						configuration = await resolveConfiguration(ctx, credential, selectedTarget());
 					} catch (error) {
 						if (error instanceof ActualyzeConfigurationError) return undefined;
 						throw error;
@@ -188,7 +217,7 @@ export function createActualyzeProvider(options: ActualyzeProviderOptions = {}):
 					return { type: "api_key", source: configuration.source };
 				},
 				resolve: async ({ ctx, credential }): Promise<AuthResult | undefined> => {
-					const configuration = await resolveConfiguration(ctx, credential);
+					const configuration = await resolveConfiguration(ctx, credential, selectedTarget());
 					if (!configuration) return undefined;
 					lastResolvedConfiguration = configuration;
 					return {
@@ -205,7 +234,7 @@ export function createActualyzeProvider(options: ActualyzeProviderOptions = {}):
 		getModels: () => models,
 		refreshModels: async (context: RefreshModelsContext): Promise<void> => {
 			const credential = context.credential?.type === "api_key" ? context.credential : undefined;
-			const configuration = refreshConfiguration(credential) ?? lastResolvedConfiguration;
+			const configuration = refreshConfiguration(credential, selectedTarget()) ?? lastResolvedConfiguration;
 			if (!configuration) return;
 
 			if (
@@ -222,19 +251,14 @@ export function createActualyzeProvider(options: ActualyzeProviderOptions = {}):
 				return;
 			}
 
-			// A mismatched pending login catalog is NEVER cleared here; only the
-			// matching branch above consumes it. Rationale: a stale old-credential
-			// refresh can race a fresh login without being superseded until the
-			// runtime's post-login sync, so even a *successful* mismatched publish
-			// may be the stale refresh clobbering the login. Leaving pending in
-			// place makes the race self-heal — the post-login refresh matches
-			// pending and republishes the login catalog. Tradeoff: if auth
-			// genuinely moves to another target, pending is retained as dead
-			// weight (one catalog array), and should auth later return to the
-			// pending configuration without a new login, the matching branch
-			// republishes the login-time catalog once (bounded staleness) before
-			// the next refresh fetches fresh. This also avoids relying on any
-			// host-specific supersession behavior: publish-gating alone suffices.
+			// Only the matching branch above consumes a pending login catalog.
+			// A refresh holding an older credential can still be in flight when
+			// login completes, and pi does not supersede it until the post-login
+			// sync, so a successful mismatched publish may be that stale refresh.
+			// Keeping the pending catalog lets the post-login refresh republish
+			// it. If auth later returns to the pending configuration without a
+			// new login, the login-time catalog is republished once before the
+			// next network refresh replaces it.
 
 			if (context.stored) {
 				const restored = context.stored.models.filter((model) => isRestorableModel(model, configuration.baseUrl));

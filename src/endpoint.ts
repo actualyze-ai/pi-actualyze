@@ -24,8 +24,12 @@ export function normalizeTarget(value: string): string {
 	return target;
 }
 
+export function actualyzeHost(target: string): string {
+	return `${normalizeTarget(target)}.actualyze.ai`;
+}
+
 export function actualyzeBaseUrl(target: string): string {
-	return `https://${normalizeTarget(target)}.actualyze.ai${ACTUALYZE_API_PATH}`;
+	return `https://${actualyzeHost(target)}${ACTUALYZE_API_PATH}`;
 }
 
 export function validateApiKey(value: string): string {

@@ -1,11 +1,47 @@
-import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { type SpawnSyncReturns, spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import packageManifest from "../package.json";
+import { parseCatalog } from "../src/catalog.js";
+import { modelEntry } from "./fixtures.js";
 
 const projectRoot = resolve(import.meta.dirname, "..");
+const piCli = resolve(projectRoot, "node_modules/@earendil-works/pi-coding-agent/dist/cli.js");
+
+/** Run the real pi CLI with only this extension loaded and an isolated agent dir. */
+function runPi(
+	args: string[],
+	options: { env?: Record<string, string>; modelsStore?: unknown } = {},
+): SpawnSyncReturns<string> {
+	const agentDir = mkdtempSync(resolve(tmpdir(), "pi-actualyze-integration-"));
+	try {
+		if (options.modelsStore !== undefined) {
+			writeFileSync(resolve(agentDir, "models-store.json"), JSON.stringify(options.modelsStore));
+		}
+		return spawnSync(
+			process.execPath,
+			[piCli, "--no-extensions", "-e", resolve(projectRoot, "src/index.ts"), ...args],
+			{
+				cwd: projectRoot,
+				encoding: "utf8",
+				input: "",
+				env: {
+					...process.env,
+					PI_CODING_AGENT_DIR: agentDir,
+					ACTUALYZE_TARGET: "",
+					ACTUALYZE_API_KEY: "",
+					NO_COLOR: "1",
+					...options.env,
+				},
+				timeout: 30_000,
+			},
+		);
+	} finally {
+		rmSync(agentDir, { recursive: true, force: true });
+	}
+}
 
 describe("pi package integration", () => {
 	it("declares only the native extension entry and publish-safe files", () => {
@@ -56,30 +92,34 @@ describe("pi package integration", () => {
 	});
 
 	it("loads through an isolated pi CLI process", () => {
-		const agentDir = mkdtempSync(resolve(tmpdir(), "pi-actualyze-integration-"));
-		try {
-			const piCli = resolve(projectRoot, "node_modules/@earendil-works/pi-coding-agent/dist/cli.js");
-			expect(readFileSync(piCli, "utf8").length).toBeGreaterThan(0);
-			const result = spawnSync(
-				process.execPath,
-				[piCli, "--no-extensions", "-e", resolve(projectRoot, "src/index.ts"), "--list-models"],
-				{
-					cwd: projectRoot,
-					encoding: "utf8",
-					env: {
-						...process.env,
-						PI_CODING_AGENT_DIR: agentDir,
-						ACTUALYZE_TARGET: "",
-						ACTUALYZE_API_KEY: "",
-						NO_COLOR: "1",
-					},
-					timeout: 30_000,
-				},
-			);
-			expect(result.status, result.stderr).toBe(0);
-			expect(result.stderr).not.toMatch(/failed to load|extension error/iu);
-		} finally {
-			rmSync(agentDir, { recursive: true, force: true });
-		}
+		expect(readFileSync(piCli, "utf8").length).toBeGreaterThan(0);
+		const result = runPi(["--list-models"]);
+		expect(result.status, result.stderr).toBe(0);
+		expect(result.stderr).not.toMatch(/failed to load|extension error/iu);
+	});
+
+	it("accepts --actualyze-target where pi rejects an unregistered flag", () => {
+		// --list-models exits before pi validates extension flags, so use print
+		// mode, which reports flag diagnostics before it looks for a model. The
+		// unregistered control proves this invocation does validate flags.
+		const printArgs = ["--offline", "--no-session", "-p", "hi"];
+		const accepted = runPi([...printArgs, "--actualyze-target", "staging"]);
+		expect(accepted.stderr).not.toMatch(/Unknown option|requires a value/u);
+		const rejected = runPi([...printArgs, "--actualyze-unregistered", "staging"]);
+		expect(rejected.stderr).toMatch(/Unknown option: --actualyze-unregistered/u);
+	});
+
+	// pi runs its startup cache-only refresh before it applies extension flag
+	// values. Without the argv fallback in index.ts the provider would resolve
+	// "app" there, delete the selected target's cache as mismatched, and list
+	// nothing.
+	it("restores the --actualyze-target cache at startup for a key-only environment", () => {
+		const cached = parseCatalog({ data: [modelEntry("staging-cached")] }, "https://staging.actualyze.ai/openai/v1");
+		const result = runPi(["--offline", "--actualyze-target", "staging", "--list-models"], {
+			env: { ACTUALYZE_API_KEY: "test-key" },
+			modelsStore: { actualyze: { models: cached } },
+		});
+		expect(result.status, result.stderr).toBe(0);
+		expect(result.stdout).toMatch(/staging-cached/u);
 	});
 });

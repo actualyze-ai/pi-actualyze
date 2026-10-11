@@ -8,6 +8,7 @@ import type {
 } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import { parseCatalog } from "../src/catalog.js";
+import { ActualyzeConfigurationError } from "../src/endpoint.js";
 import { createActualyzeProvider } from "../src/provider.js";
 import { jsonResponse, modelEntry } from "./fixtures.js";
 
@@ -16,6 +17,20 @@ function authContext(values: Record<string, string | undefined>): AuthContext {
 		env: async (name) => values[name],
 		fileExists: async () => false,
 	};
+}
+
+function keyInteraction(key: string) {
+	return {
+		signal: new AbortController().signal,
+		prompt: vi.fn(async () => key),
+		notify: vi.fn(),
+	};
+}
+
+function requestedHost(call: Parameters<typeof fetch> | undefined): string | undefined {
+	const input = call?.[0];
+	if (input === undefined) return undefined;
+	return new URL(input instanceof Request ? input.url : input).hostname;
 }
 
 function credential(target = "customer", key = "secret"): ApiKeyCredential {
@@ -36,8 +51,8 @@ function refreshContext(
 const catalogPayload = { data: [modelEntry("model-a"), modelEntry("model-b")] };
 
 describe("native Actualyze provider auth", () => {
-	it("resolves stored fields before ambient values", async () => {
-		const { provider } = createActualyzeProvider();
+	it("resolves stored fields before the selected target and ambient values", async () => {
+		const { provider } = createActualyzeProvider({ target: () => "flagged" });
 		const resolve = provider.auth.apiKey?.resolve;
 		expect(resolve).toBeDefined();
 		const result = await resolve?.({
@@ -151,8 +166,11 @@ describe("native Actualyze provider auth", () => {
 
 	it("validates login against /models and installs the catalog immediately", async () => {
 		const network = vi.fn<typeof fetch>(async () => jsonResponse(catalogPayload));
-		const controller = createActualyzeProvider({ fetch: network });
-		const answers = ["Customer", "login-secret"];
+		const controller = createActualyzeProvider({
+			fetch: network,
+			target: () => "Customer",
+		});
+		const answers = ["login-secret"];
 		const interaction: AuthInteraction = {
 			signal: new AbortController().signal,
 			prompt: vi.fn(async () => answers.shift() ?? ""),
@@ -167,16 +185,18 @@ describe("native Actualyze provider auth", () => {
 		expect(new Headers(network.mock.calls[0]?.[1]?.headers).get("authorization")).toBe("Bearer login-secret");
 	});
 
-	it("rejects surrounding whitespace in an interactive target", async () => {
+	it("rejects surrounding whitespace in a selected target", async () => {
 		const network = vi.fn<typeof fetch>();
-		const controller = createActualyzeProvider({ fetch: network });
-		const answers = [" customer ", "secret"];
-		const interaction = {
-			signal: new AbortController().signal,
-			prompt: async () => answers.shift() ?? "",
-			notify: vi.fn(),
-		};
-		await expect(controller.provider.auth.apiKey?.login?.(interaction)).rejects.toThrow(/one ASCII DNS label/u);
+		const controller = createActualyzeProvider({
+			fetch: network,
+			target: () => " customer ",
+		});
+		const interaction = keyInteraction("secret");
+		const login = controller.provider.auth.apiKey?.login?.(interaction);
+		await expect(login).rejects.toBeInstanceOf(ActualyzeConfigurationError);
+		await expect(login).rejects.toThrow(/one ASCII DNS label/u);
+		// A bad selection fails before the user is asked for a key.
+		expect(interaction.prompt).not.toHaveBeenCalled();
 		expect(network).not.toHaveBeenCalled();
 	});
 
@@ -184,7 +204,7 @@ describe("native Actualyze provider auth", () => {
 		const controller = createActualyzeProvider({
 			fetch: async () => new Response(null, { status: 401 }),
 		});
-		const answers = ["customer", "bad-secret"];
+		const answers = ["bad-secret"];
 		const interaction = {
 			signal: new AbortController().signal,
 			prompt: async () => answers.shift() ?? "",
@@ -192,6 +212,167 @@ describe("native Actualyze provider auth", () => {
 		};
 		await expect(controller.provider.auth.apiKey?.login?.(interaction)).rejects.toThrow(/HTTP 401/u);
 		expect(controller.getModels()).toEqual([]);
+	});
+});
+
+describe("Actualyze target selection", () => {
+	describe("when resolving ambient auth", () => {
+		it.each([
+			{ flag: undefined, env: undefined, expected: "app" },
+			{ flag: "", env: "", expected: "app" },
+			{ flag: "", env: "team", expected: "team" },
+			{ flag: "flagged", env: "team", expected: "flagged" },
+		])("selects $expected for flag $flag and ACTUALYZE_TARGET $env", async ({ flag, env, expected }) => {
+			const { provider } = createActualyzeProvider({ target: () => flag });
+			const ctx = authContext({
+				ACTUALYZE_TARGET: env,
+				ACTUALYZE_API_KEY: "ambient-key",
+			});
+			const signal = new AbortController().signal;
+			await expect(provider.auth.apiKey?.resolve({ ctx, signal })).resolves.toEqual({
+				auth: {
+					apiKey: "ambient-key",
+					baseUrl: `https://${expected}.actualyze.ai/openai/v1`,
+				},
+				env: { ACTUALYZE_TARGET: expected },
+				source: "ACTUALYZE_API_KEY",
+			});
+			await expect(provider.auth.apiKey?.check?.({ ctx, signal })).resolves.toEqual({
+				type: "api_key",
+				source: "ACTUALYZE_API_KEY",
+			});
+		});
+
+		it("reports an invalid selected target as unavailable even when ACTUALYZE_TARGET is valid", async () => {
+			const { provider } = createActualyzeProvider({
+				target: () => "evil.example",
+			});
+			const ctx = authContext({
+				ACTUALYZE_TARGET: "team",
+				ACTUALYZE_API_KEY: "ambient-key",
+			});
+			const signal = new AbortController().signal;
+			await expect(provider.auth.apiKey?.resolve({ ctx, signal })).resolves.toBeUndefined();
+			await expect(provider.auth.apiKey?.check?.({ ctx, signal })).resolves.toBeUndefined();
+		});
+
+		it("reads the selected target on every resolution, not at construction", async () => {
+			let flag: string | undefined;
+			const { provider } = createActualyzeProvider({ target: () => flag });
+			flag = "late";
+			await expect(
+				provider.auth.apiKey?.resolve({
+					ctx: authContext({ ACTUALYZE_API_KEY: "ambient-key" }),
+					signal: new AbortController().signal,
+				}),
+			).resolves.toMatchObject({ env: { ACTUALYZE_TARGET: "late" } });
+		});
+	});
+
+	describe("when logging in", () => {
+		it("prompts once for the key against production when nothing is selected", async () => {
+			vi.stubEnv("ACTUALYZE_TARGET", "");
+			const network = vi.fn<typeof fetch>(async () => jsonResponse(catalogPayload));
+			const controller = createActualyzeProvider({ fetch: network });
+			const interaction = keyInteraction("prod-key");
+			await expect(controller.provider.auth.apiKey?.login?.(interaction)).resolves.toEqual(
+				credential("app", "prod-key"),
+			);
+			expect(interaction.prompt).toHaveBeenCalledOnce();
+			expect(interaction.prompt).toHaveBeenCalledWith({
+				type: "secret",
+				message: "Actualyze API key for app.actualyze.ai",
+			});
+			expect(requestedHost(network.mock.calls[0])).toBe("app.actualyze.ai");
+		});
+
+		it("logs in to the selected target over ACTUALYZE_TARGET", async () => {
+			vi.stubEnv("ACTUALYZE_TARGET", "team");
+			const network = vi.fn<typeof fetch>(async () => jsonResponse(catalogPayload));
+			const controller = createActualyzeProvider({
+				fetch: network,
+				target: () => "Flagged",
+			});
+			const interaction = keyInteraction("flag-key");
+			await expect(controller.provider.auth.apiKey?.login?.(interaction)).resolves.toEqual(
+				credential("flagged", "flag-key"),
+			);
+			expect(interaction.prompt).toHaveBeenCalledWith(
+				expect.objectContaining({
+					message: "Actualyze API key for flagged.actualyze.ai",
+				}),
+			);
+			expect(requestedHost(network.mock.calls[0])).toBe("flagged.actualyze.ai");
+		});
+
+		it("rejects an invalid ACTUALYZE_TARGET before prompting", async () => {
+			vi.stubEnv("ACTUALYZE_TARGET", "evil.example");
+			const network = vi.fn<typeof fetch>();
+			const controller = createActualyzeProvider({ fetch: network });
+			const interaction = keyInteraction("secret");
+			await expect(controller.provider.auth.apiKey?.login?.(interaction)).rejects.toBeInstanceOf(
+				ActualyzeConfigurationError,
+			);
+			expect(interaction.prompt).not.toHaveBeenCalled();
+			expect(network).not.toHaveBeenCalled();
+		});
+	});
+
+	describe("when refreshing models", () => {
+		const publishAll = async (publication: ModelsPublication) => {
+			publication.update?.();
+			return true;
+		};
+
+		it("restores the production cache for an ACTUALYZE_API_KEY-only environment", async () => {
+			vi.stubEnv("ACTUALYZE_API_KEY", "ambient-key");
+			const controller = createActualyzeProvider({
+				fetch: async () => {
+					throw new Error("cache-only refresh must not use the network");
+				},
+			});
+			const [cached] = parseCatalog({ data: [modelEntry("prod-cached")] }, "https://app.actualyze.ai/openai/v1");
+			await controller.provider.refreshModels?.(
+				refreshContext({
+					credential: undefined,
+					allowNetwork: false,
+					stored: { models: [cached] },
+					publish: publishAll,
+				}),
+			);
+			expect(controller.getModels().map((model) => model.id)).toEqual(["prod-cached"]);
+		});
+
+		it("fetches from the selected target over ACTUALYZE_TARGET", async () => {
+			vi.stubEnv("ACTUALYZE_TARGET", "team");
+			vi.stubEnv("ACTUALYZE_API_KEY", "ambient-key");
+			const network = vi.fn<typeof fetch>(async () => jsonResponse(catalogPayload));
+			const controller = createActualyzeProvider({
+				fetch: network,
+				target: () => "flagged",
+			});
+			await controller.provider.refreshModels?.(refreshContext({ credential: undefined, publish: publishAll }));
+			expect(requestedHost(network.mock.calls[0])).toBe("flagged.actualyze.ai");
+			expect(controller.getModels().map((model) => model.baseUrl)).toEqual([
+				"https://flagged.actualyze.ai/openai/v1",
+				"https://flagged.actualyze.ai/openai/v1",
+			]);
+		});
+
+		it("keeps a stored credential's target over the selected target", async () => {
+			const network = vi.fn<typeof fetch>(async () => jsonResponse(catalogPayload));
+			const controller = createActualyzeProvider({
+				fetch: network,
+				target: () => "flagged",
+			});
+			await controller.provider.refreshModels?.(
+				refreshContext({
+					credential: credential("stored", "stored-key"),
+					publish: publishAll,
+				}),
+			);
+			expect(requestedHost(network.mock.calls[0])).toBe("stored.actualyze.ai");
+		});
 	});
 });
 
@@ -378,7 +559,8 @@ describe("dynamic Actualyze catalog lifecycle", () => {
 		const controller = createActualyzeProvider({
 			fetch: async () => jsonResponse({ data: [modelEntry("fresh-entitlement")] }),
 		});
-		const answers = ["customer", "rotated-key"];
+		vi.stubEnv("ACTUALYZE_TARGET", "customer");
+		const answers = ["rotated-key"];
 		await controller.provider.auth.apiKey?.login?.({
 			signal: new AbortController().signal,
 			prompt: async () => answers.shift() ?? "",
@@ -408,14 +590,15 @@ describe("dynamic Actualyze catalog lifecycle", () => {
 		const controller = createActualyzeProvider({
 			fetch: async () => jsonResponse({ data: [modelEntry("fresh-login-model")] }),
 		});
-		const answers = ["new-target", "new-key"];
+		vi.stubEnv("ACTUALYZE_TARGET", "new-target");
+		const answers = ["new-key"];
 		await controller.provider.auth.apiKey?.login?.({
 			signal: new AbortController().signal,
 			prompt: async () => answers.shift() ?? "",
 			notify: vi.fn(),
 		});
 		// pi's post-login refresh supersedes the stale in-flight refresh, so its
-		// publishes return false — the pending login catalog must survive them.
+		// publishes return false; the pending login catalog must survive them.
 		const [oldCachedModel] = parseCatalog(
 			{ data: [modelEntry("old-model")] },
 			"https://old-target.actualyze.ai/openai/v1",
@@ -456,16 +639,16 @@ describe("dynamic Actualyze catalog lifecycle", () => {
 			});
 		});
 		const controller = createActualyzeProvider({ fetch: network });
-		const answers = ["new-target", "new-key"];
+		vi.stubEnv("ACTUALYZE_TARGET", "new-target");
+		const answers = ["new-key"];
 		await controller.provider.auth.apiKey?.login?.({
 			signal: new AbortController().signal,
 			prompt: async () => answers.shift() ?? "",
 			notify: vi.fn(),
 		});
-		// A mismatched refresh publishes the old target's catalog (the wedge from
-		// F4 stays fixed — restore and network both run) but never consumes the
-		// pending login catalog: a successful publish could equally be a stale
-		// refresh racing the login.
+		// A mismatched refresh publishes the old target's catalog (restore and
+		// network both run) but never consumes the pending login catalog: a
+		// successful publish could equally be a stale refresh racing the login.
 		const [oldCachedModel] = parseCatalog(
 			{ data: [modelEntry("old-model")] },
 			"https://old-target.actualyze.ai/openai/v1",
@@ -541,7 +724,8 @@ describe("dynamic Actualyze catalog lifecycle", () => {
 		);
 
 		// Login completes while the stale refresh is in flight.
-		const answers = ["new-target", "new-key"];
+		vi.stubEnv("ACTUALYZE_TARGET", "new-target");
+		const answers = ["new-key"];
 		await controller.provider.auth.apiKey?.login?.({
 			signal: new AbortController().signal,
 			prompt: async () => answers.shift() ?? "",
@@ -550,7 +734,7 @@ describe("dynamic Actualyze catalog lifecycle", () => {
 		expect(controller.getModels().map((model) => model.id)).toEqual(["fresh-login-model"]);
 
 		// The stale fetch resolves and its publish succeeds (generation still
-		// current at publish time — no supersession happened).
+		// current at publish time, so no supersession happened).
 		releaseOldFetch?.();
 		await staleRefresh;
 		expect(controller.getModels().map((model) => model.id)).toEqual(["old-model"]);

@@ -24,7 +24,9 @@ async function runtime(
 }
 
 function loginInteraction(target: string, key: string) {
-	const answers = [target, key];
+	// Login does not prompt for a target; select it through ACTUALYZE_TARGET.
+	vi.stubEnv("ACTUALYZE_TARGET", target);
+	const answers = [key];
 	return {
 		signal: new AbortController().signal,
 		prompt: vi.fn(async () => answers.shift() ?? ""),
