@@ -1,11 +1,12 @@
-import type {
-	Api,
-	ApiKeyCredential,
-	AuthContext,
-	AuthResult,
-	Model,
-	Provider,
-	RefreshModelsContext,
+import {
+	type AnyModel,
+	type ApiKeyCredential,
+	type AuthContext,
+	type AuthResult,
+	isModelType,
+	type Model,
+	type Provider,
+	type RefreshModelsContext,
 } from "@earendil-works/pi-ai";
 import { openAICompletionsApi } from "@earendil-works/pi-ai/compat";
 import { ActualyzeClient, type ActualyzeClientOptions } from "./client.js";
@@ -104,8 +105,13 @@ async function resolveConfiguration(
 	};
 }
 
-function isRestorableModel(model: Model<Api>, baseUrl: string): model is Model<"openai-completions"> {
-	return model.provider === ACTUALYZE_PROVIDER_ID && model.api === "openai-completions" && model.baseUrl === baseUrl;
+function isRestorableModel(model: AnyModel, baseUrl: string): model is Model<"openai-completions"> {
+	return (
+		isModelType(model, "chat") &&
+		model.provider === ACTUALYZE_PROVIDER_ID &&
+		model.api === "openai-completions" &&
+		model.baseUrl === baseUrl
+	);
 }
 
 function refreshConfiguration(

@@ -1,4 +1,4 @@
-import type { Context } from "@earendil-works/pi-ai";
+import { type Context, normalizeContext } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import { parseCatalog } from "../src/catalog.js";
 import { createActualyzeProvider } from "../src/provider.js";
@@ -62,7 +62,7 @@ describe("native guarded OpenAI streaming", () => {
 			messages: [{ role: "user", content: "Say OK", timestamp: 1 }],
 		};
 		const result = await controller.provider
-			.streamSimple(model, context, {
+			.streamSimple(model, normalizeContext(context), {
 				apiKey: "stream-secret",
 				env: { ACTUALYZE_TARGET: "customer" },
 				maxTokens: 64,
@@ -92,7 +92,7 @@ describe("native guarded OpenAI streaming", () => {
 			messages: [{ role: "user", content: "Fail safely", timestamp: 1 }],
 		};
 		const result = await controller.provider
-			.streamSimple(model, context, {
+			.streamSimple(model, normalizeContext(context), {
 				apiKey: secret,
 				env: { ACTUALYZE_TARGET: "customer" },
 				maxRetries: 0,
@@ -108,14 +108,10 @@ describe("native guarded OpenAI streaming", () => {
 		const controller = createActualyzeProvider({ fetch: network });
 		const [stale] = parseCatalog({ data: [modelEntry("stale")] }, "https://old.actualyze.ai/openai/v1");
 		expect(() =>
-			controller.provider.streamSimple(
-				stale,
-				{ messages: [] },
-				{
-					apiKey: "new-target-secret",
-					env: { ACTUALYZE_TARGET: "customer" },
-				},
-			),
+			controller.provider.streamSimple(stale, normalizeContext({ messages: [] }), {
+				apiKey: "new-target-secret",
+				env: { ACTUALYZE_TARGET: "customer" },
+			}),
 		).toThrow(/another target/u);
 		expect(network).not.toHaveBeenCalled();
 	});
@@ -142,14 +138,10 @@ describe("native guarded OpenAI streaming", () => {
 		const [retainedA] = parseCatalog({ data: [modelEntry("a-only-model")] }, "https://target-b.actualyze.ai/openai/v1");
 		network.mockClear();
 		expect(() =>
-			controller.provider.streamSimple(
-				retainedA,
-				{ messages: [] },
-				{
-					apiKey: "b-key",
-					env: { ACTUALYZE_TARGET: "target-b" },
-				},
-			),
+			controller.provider.streamSimple(retainedA, normalizeContext({ messages: [] }), {
+				apiKey: "b-key",
+				env: { ACTUALYZE_TARGET: "target-b" },
+			}),
 		).toThrow(/not in the discovered catalog/u);
 		expect(network).not.toHaveBeenCalled();
 	});

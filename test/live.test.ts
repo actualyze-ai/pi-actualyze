@@ -1,4 +1,4 @@
-import { type ToolResultMessage, Type } from "@earendil-works/pi-ai";
+import { normalizeContext, type ToolResultMessage, Type } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 import { parseCatalog } from "../src/catalog.js";
 import { actualyzeBaseUrl, normalizeTarget, validateApiKey } from "../src/endpoint.js";
@@ -64,7 +64,7 @@ describe.skipIf(!liveInference)("Actualyze live inference", () => {
 			signal: AbortSignal.timeout(90_000),
 		};
 		const first = await provider
-			.stream(model, { messages: [user], tools }, { ...options, toolChoice: "required" })
+			.stream(model, normalizeContext({ messages: [user], tools }), { ...options, toolChoice: "required" })
 			.result();
 		expect(first.stopReason).toBe("toolUse");
 		const toolCall = first.content.find((block) => block.type === "toolCall");
@@ -80,7 +80,9 @@ describe.skipIf(!liveInference)("Actualyze live inference", () => {
 			isError: false,
 			timestamp: Date.now(),
 		};
-		const second = await provider.stream(model, { messages: [user, first, result], tools }, options).result();
+		const second = await provider
+			.stream(model, normalizeContext({ messages: [user, first, result], tools }), options)
+			.result();
 		expect(second.stopReason).not.toBe("error");
 		expect(second.content.some((block) => block.type === "text" && block.text.length > 0)).toBe(true);
 	}, 120_000);
@@ -102,7 +104,7 @@ describe.skipIf(!liveAdvisory)("Actualyze live advisory flags", () => {
 		const result = await createActualyzeProvider()
 			.provider.streamSimple(
 				model,
-				{ messages: [{ role: "user", content: "Reply with OK only.", timestamp: Date.now() }] },
+				normalizeContext({ messages: [{ role: "user", content: "Reply with OK only.", timestamp: Date.now() }] }),
 				{
 					apiKey: secret,
 					env: { ACTUALYZE_TARGET: normalizedTarget },

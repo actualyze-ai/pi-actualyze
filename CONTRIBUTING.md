@@ -8,7 +8,7 @@ provider, and the invariants that must not regress.
 - Node.js 22.19.0 or newer (CI runs 22 and 24)
 - npm (ships with Node)
 - A [pi](https://github.com/earendil-works/pi) checkout or installation of
-  0.84.2 or newer if you want to exercise the extension end to end
+  1.0.0 or newer if you want to exercise the extension end to end
 
 ## Setup
 

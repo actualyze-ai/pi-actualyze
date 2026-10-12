@@ -2,6 +2,8 @@ import type {
 	ApiKeyCredential,
 	AuthContext,
 	AuthInteraction,
+	ImageApi,
+	ImageModel,
 	Model,
 	ModelsPublication,
 	RefreshModelsContext,
@@ -421,6 +423,37 @@ describe("dynamic Actualyze catalog lifecycle", () => {
 			refreshContext({
 				allowNetwork: false,
 				stored: { models: [stale] },
+				publish,
+			}),
+		);
+		expect(controller.getModels()).toEqual([]);
+		expect(publish).toHaveBeenCalledWith(expect.objectContaining({ persist: null }));
+	});
+
+	it("deletes a same-target cache that holds a non-chat model entry", async () => {
+		const controller = createActualyzeProvider();
+		const [chat] = parseCatalog({ data: [modelEntry("chat")] }, "https://customer.actualyze.ai/openai/v1");
+		// The image API is an open string, so only the model type tells this
+		// entry apart from a restorable chat model.
+		const image = {
+			type: "image",
+			id: "image",
+			name: "image",
+			api: "openai-completions",
+			provider: "actualyze",
+			baseUrl: "https://customer.actualyze.ai/openai/v1",
+			input: ["text"],
+			output: ["image"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		} satisfies ImageModel<ImageApi>;
+		const publish = vi.fn(async (publication: ModelsPublication) => {
+			publication.update?.();
+			return true;
+		});
+		await controller.provider.refreshModels?.(
+			refreshContext({
+				allowNetwork: false,
+				stored: { models: [chat, image] },
 				publish,
 			}),
 		);

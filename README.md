@@ -152,7 +152,8 @@ pi --no-extensions -e .
 
 ### Requirements
 
-- pi `0.84.2` or newer
+- pi `1.0.0` or newer (for pi `0.84.2` through 0.x, install pi-actualyze `1.0.0`:
+  `pi install npm:pi-actualyze@1.0.0`)
 - Node.js `22.19.0` or newer for development
 - Network access to `app.actualyze.ai` (or the selected `*.actualyze.ai` target)
 - An Actualyze API key valid for that target
@@ -457,7 +458,12 @@ pi list
 pi --version
 ```
 
-The package requires pi 0.84.2 or newer.
+The package requires pi 1.0.0 or newer. For pi 0.84.2 through 0.x, install
+pi-actualyze 1.0.0, the last release for pi 0.x:
+
+```bash
+pi install npm:pi-actualyze@1.0.0
+```
 
 ### `actualyze` does not appear in `/login`
 
