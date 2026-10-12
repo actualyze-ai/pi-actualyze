@@ -10,6 +10,6 @@ permissions: {}
 jobs:
   vuln-scan:
     name: vuln-scan
-    uses: actualyze-ai/workflows/.github/workflows/vuln-scan.yml@5749de438e73eaa028d5331066c98a1764b5072d
+    uses: actualyze-ai/workflows/.github/workflows/vuln-scan.yml@d4a548bca701986d7cbcbae463f1914e5c5283fa # v1.0.0
     permissions:
       contents: read

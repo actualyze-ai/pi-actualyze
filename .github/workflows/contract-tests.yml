@@ -10,7 +10,12 @@ permissions: {}
 jobs:
   contract-tests:
     name: contract-tests
-    uses: actualyze-ai/workflows/.github/workflows/contract-tests.yml@5749de438e73eaa028d5331066c98a1764b5072d
+    uses: actualyze-ai/workflows/.github/workflows/contract-tests.yml@d4a548bca701986d7cbcbae463f1914e5c5283fa # v1.0.0
     permissions:
       contents: read
       issues: write
+    # The key is passed explicitly and is expected to come from the
+    # contract-tests environment, where the called job runs. If the job
+    # reports the key missing, pass `secrets: inherit` here instead.
+    secrets:
+      ACTUALYZE_API_KEY: ${{ secrets.ACTUALYZE_API_KEY }}
