@@ -1,0 +1,19 @@
+name: Host compatibility
+
+on:
+  schedule:
+    - cron: "41 6 * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  compat:
+    name: compat
+    uses: actualyze-ai/workflows/.github/workflows/compat-node.yml@f703ff6490ac465fe8b32858ddd8222aab737427
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+    with:
+      host-packages: "@earendil-works/pi-ai @earendil-works/pi-coding-agent"

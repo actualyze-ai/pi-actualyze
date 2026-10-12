@@ -1,0 +1,25 @@
+name: CodeQL
+
+on:
+  pull_request:
+  merge_group:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "23 5 * * 1"
+
+permissions: {}
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  codeql:
+    name: codeql
+    uses: actualyze-ai/workflows/.github/workflows/codeql.yml@f703ff6490ac465fe8b32858ddd8222aab737427
+    permissions:
+      actions: read
+      contents: read
+      packages: read
+      security-events: write

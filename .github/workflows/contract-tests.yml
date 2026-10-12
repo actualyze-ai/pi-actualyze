@@ -1,0 +1,16 @@
+name: Contract tests
+
+on:
+  schedule:
+    - cron: "53 6 * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  contract-tests:
+    name: contract-tests
+    uses: actualyze-ai/workflows/.github/workflows/contract-tests.yml@f703ff6490ac465fe8b32858ddd8222aab737427
+    permissions:
+      contents: read
+      issues: write

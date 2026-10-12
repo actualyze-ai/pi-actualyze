@@ -1,0 +1,18 @@
+name: Dependency review
+
+on:
+  pull_request:
+  merge_group:
+
+permissions: {}
+
+concurrency:
+  group: dependency-review-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dependency-review:
+    name: dependency-review
+    uses: actualyze-ai/workflows/.github/workflows/dependency-review.yml@f703ff6490ac465fe8b32858ddd8222aab737427
+    permissions:
+      contents: read

@@ -1,0 +1,4 @@
+# Published npm versions without a provenance attestation, one
+# "<version> <reason>" per line. The scheduled vulnerability scan fails for
+# any other published version that lacks provenance.
+1.0.0 Published before trusted publishing was configured for this package

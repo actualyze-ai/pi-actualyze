@@ -1,0 +1,25 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      # The pi packages move together and include major versions, because
+      # the host SDK packages are released in lockstep.
+      pi:
+        patterns:
+          - "@earendil-works/*"
+      minor-and-patch:
+        update-types: [minor, patch]
+        exclude-patterns:
+          - "@earendil-works/*"
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7

@@ -1,0 +1,5 @@
+# Workflows, package metadata, and the lockfile decide what CI runs and
+# what gets published, so they need review from a release approver.
+/.github/            @actualyze-ai/oss-release-approvers
+/package.json        @actualyze-ai/oss-release-approvers
+/package-lock.json   @actualyze-ai/oss-release-approvers

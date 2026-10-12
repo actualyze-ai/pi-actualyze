@@ -1,0 +1,15 @@
+name: Vulnerability scan
+
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  vuln-scan:
+    name: vuln-scan
+    uses: actualyze-ai/workflows/.github/workflows/vuln-scan.yml@f703ff6490ac465fe8b32858ddd8222aab737427
+    permissions:
+      contents: read

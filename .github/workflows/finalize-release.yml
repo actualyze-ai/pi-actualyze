@@ -1,0 +1,25 @@
+name: Finalize release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag, such as v1.2.3. Approve its staged npm publish first.
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: finalize-release-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  finalize:
+    name: finalize
+    uses: actualyze-ai/workflows/.github/workflows/finalize-release.yml@f703ff6490ac465fe8b32858ddd8222aab737427
+    permissions:
+      actions: read
+      contents: write
+    with:
+      tag: ${{ inputs.tag }}

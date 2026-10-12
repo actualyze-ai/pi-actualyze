@@ -31,14 +31,24 @@ pi --no-extensions -e .
 
 ## Development workflow
 
-| Where               | What runs                                                                            |
-| ------------------- | ------------------------------------------------------------------------------------ |
-| `pre-commit` hook   | Biome lint/format on staged files (lint-staged)                                      |
-| `pre-push` hook     | `npm run check`                                                                      |
-| CI (`ci.yml`)       | `npm ci` + `npm run check` on pull requests, Node 22 and 24                          |
-| CI (`latest.yml`)   | `npm run check` on pushes to `main`, then a rolling `latest` prerelease              |
-| CI (`release.yml`)  | On `v*` tags: `npm run check`, npm publish (OIDC trusted publishing), GitHub release |
-| Never automatically | Live tests (`npm run test:live`), which spend real credentials and money             |
+| Where                        | What runs                                                                                              |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `pre-commit` hook            | Biome lint/format on staged files (lint-staged)                                                        |
+| `pre-push` hook              | `npm run check`                                                                                        |
+| CI (`ci.yml`)                | `npm ci`, `npm run check`, and `npm audit signatures` on Node 22 and 24, plus actionlint and zizmor    |
+| CI (`codeql.yml`)            | CodeQL for JavaScript/TypeScript and the workflows, on every change and weekly                         |
+| CI (`dependency-review.yml`) | Blocks pull requests that add vulnerable, denied, or disallowed-license dependencies                   |
+| CI (`vuln-scan.yml`)         | Daily full-tree `npm audit`, `npm audit signatures`, and a provenance check of every published version |
+| CI (`compat.yml`)            | Daily tests against pi's pinned, `latest`, and `next` releases; failures open a `compat` issue         |
+| CI (`contract-tests.yml`)    | Daily `npm run test:contract` against a live endpoint from the `contract-tests` environment            |
+| CI (`scorecard.yml`)         | OpenSSF Scorecard, weekly and on pushes to `main`                                                      |
+| CI (`release.yml`)           | On `v*` tags: the release checks, then a staged npm publish and a draft GitHub Release after approval  |
+| CI (`finalize-release.yml`)  | Run by hand after `npm stage approve`: checks the npm version and the draft, then publishes the draft  |
+| Never automatically          | Live tests (`npm run test:live`), which spend real credentials and money                               |
+
+Every workflow is a thin caller of a reusable workflow in
+[actualyze-ai/workflows](https://github.com/actualyze-ai/workflows), pinned
+by commit SHA. Read that repository's README before changing a caller.
 
 ## Architecture
 

@@ -2,28 +2,23 @@ name: CI
 
 on:
   pull_request:
+  merge_group:
+  push:
+    branches: [main]
 
-permissions:
-  contents: read
+permissions: {}
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  check:
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        node-version: ["22", "24"]
-    steps:
-      - uses: actions/checkout@v5
-
-      - uses: actions/setup-node@v5
-        with:
-          node-version: ${{ matrix.node-version }}
-          cache: npm
-
-      - run: npm ci
-
-      - run: npm run check
+  ci:
+    name: ci
+    uses: actualyze-ai/workflows/.github/workflows/node-ci.yml@f703ff6490ac465fe8b32858ddd8222aab737427
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    with:
+      node-versions: '["22", "24"]'
