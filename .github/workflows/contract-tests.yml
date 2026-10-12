@@ -10,7 +10,7 @@ permissions: {}
 jobs:
   contract-tests:
     name: contract-tests
-    uses: actualyze-ai/workflows/.github/workflows/contract-tests.yml@f703ff6490ac465fe8b32858ddd8222aab737427
+    uses: actualyze-ai/workflows/.github/workflows/contract-tests.yml@5749de438e73eaa028d5331066c98a1764b5072d
     permissions:
       contents: read
       issues: write
