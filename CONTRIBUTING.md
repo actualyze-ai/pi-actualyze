@@ -47,7 +47,7 @@ pi --no-extensions -e .
 | Never automatically          | Live tests (`npm run test:live`), which spend real credentials and money                               |
 
 Every workflow is a thin caller of a reusable workflow in
-[actualyze-ai/workflows](https://github.com/actualyze-ai/workflows), pinned
+[actualyze-ai/oss-workflows](https://github.com/actualyze-ai/oss-workflows), pinned
 by commit SHA. Read that repository's README before changing a caller.
 
 ## Architecture

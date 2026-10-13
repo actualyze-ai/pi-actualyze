@@ -15,7 +15,7 @@ concurrency:
 jobs:
   ci:
     name: ci
-    uses: actualyze-ai/workflows/.github/workflows/node-ci.yml@d4a548bca701986d7cbcbae463f1914e5c5283fa # v1.0.0
+    uses: actualyze-ai/oss-workflows/.github/workflows/node-ci.yml@d4a548bca701986d7cbcbae463f1914e5c5283fa # v1.0.0
     permissions:
       actions: read
       contents: read

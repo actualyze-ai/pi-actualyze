@@ -17,7 +17,7 @@ concurrency:
 jobs:
   finalize:
     name: finalize
-    uses: actualyze-ai/workflows/.github/workflows/finalize-release.yml@d4a548bca701986d7cbcbae463f1914e5c5283fa # v1.0.0
+    uses: actualyze-ai/oss-workflows/.github/workflows/finalize-release.yml@d4a548bca701986d7cbcbae463f1914e5c5283fa # v1.0.0
     permissions:
       actions: read
       contents: write
