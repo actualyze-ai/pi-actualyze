@@ -308,16 +308,16 @@ interactive deadline.
 
 Actualyze model advertisements are mapped into pi as follows:
 
-| Actualyze field                     | pi field        | Behavior                                    |
-| ----------------------------------- | --------------- | ------------------------------------------- |
-| `id`                                | `id`, `name`    | Preserved exactly after safety validation   |
-| `context_window`                    | `contextWindow` | Preferred positive limit                    |
-| `max_model_len`                     | `contextWindow` | Fallback when `context_window` is absent    |
-| `max_output_tokens`                 | `maxTokens`     | Positive output limit                       |
-| `modalities.input` includes `image` | `input`         | Enables image input                         |
-| `capabilities.thinking`             | `reasoning`     | Enables reasoning when true                 |
-| `capabilities.thinking_adaptive`    | `reasoning`     | Also enables reasoning when true            |
-| `cost.*`                            | `cost`          | Represented as unknown; see below           |
+| Actualyze field                     | pi field        | Behavior                                  |
+| ----------------------------------- | --------------- | ----------------------------------------- |
+| `id`                                | `id`, `name`    | Preserved exactly after safety validation |
+| `context_window`                    | `contextWindow` | Preferred positive limit                  |
+| `max_model_len`                     | `contextWindow` | Fallback when `context_window` is absent  |
+| `max_output_tokens`                 | `maxTokens`     | Positive output limit                     |
+| `modalities.input` includes `image` | `input`         | Enables image input                       |
+| `capabilities.thinking`             | `reasoning`     | Enables reasoning when true               |
+| `capabilities.thinking_adaptive`    | `reasoning`     | Also enables reasoning when true          |
+| `cost.*`                            | `cost`          | Represented as unknown; see below         |
 
 ### Missing Limits
 
@@ -525,15 +525,16 @@ npm audit --audit-level=low
 
 Useful commands:
 
-| Command                | Purpose                                        |
-| ---------------------- | ---------------------------------------------- |
-| `npm run typecheck`    | Strict TypeScript validation                   |
-| `npm run lint`         | Biome lint checks                              |
-| `npm run format:check` | Verify formatting                              |
-| `npm test`             | Offline unit, lifecycle, and contract tests    |
-| `npm run build`        | Build JavaScript and declarations into `dist/` |
-| `npm run pack:check`   | Inspect the npm package allowlist              |
-| `npm run test:live`    | Explicit credential-gated live tests           |
+| Command                 | Purpose                                        |
+| ----------------------- | ---------------------------------------------- |
+| `npm run typecheck`     | Strict TypeScript validation                   |
+| `npm run lint`          | Biome lint checks                              |
+| `npm run format:check`  | Verify formatting                              |
+| `npm test`              | Offline unit, lifecycle, and contract tests    |
+| `npm run build`         | Build JavaScript and declarations into `dist/` |
+| `npm run pack:check`    | Inspect the npm package allowlist              |
+| `npm run test:live`     | Explicit credential-gated live tests           |
+| `npm run test:contract` | Catalog contract test against a live endpoint  |
 
 The offline suite covers endpoint validation, transport boundaries, redirects,
 redaction, hostile catalogs, exact fixture parity, login and cache lifecycle,
@@ -580,6 +581,24 @@ streamed tool loop runs only with the explicit inference flag and model.
 Never enable live tests for untrusted pull requests. Supply credentials only through
 protected local or CI secret environments.
 
+### Contract Test
+
+`npm run test:contract` fetches the model list from the endpoint in
+`ACTUALYZE_BASE_URL` and checks that the provider parses every entry, in order,
+and carries the advertised limits, image input, and reasoning flags into each
+model. It also fails if no entry advertises a context or output limit, which
+would mean the API renamed those fields. Without both variables the test is
+skipped:
+
+```bash
+ACTUALYZE_BASE_URL='https://<target>.actualyze.ai/openai/v1' \
+ACTUALYZE_API_KEY='...' \
+npm run test:contract
+```
+
+The `contract-tests.yml` workflow runs it daily with the endpoint and key held
+in the repository's `contract-tests` environment.
+
 ## Package Contents
 
 The npm file allowlist contains only:
@@ -589,6 +608,48 @@ The npm file allowlist contains only:
 - `LICENSE` and npm-generated package metadata
 
 Tests, `.env.example`, credentials, build output, and coverage are excluded.
+
+## Support
+
+pi-actualyze is maintained by [@jsquyres](https://github.com/jsquyres) and
+[@dpippenger](https://github.com/dpippenger) at Actualyze AI.
+
+| Topic                     | Support                                                                                                                             |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| Bugs and questions        | [GitHub issues](https://github.com/actualyze-ai/pi-actualyze/issues)                                                                |
+| Security reports          | Private vulnerability reporting, as described in [SECURITY.md](./SECURITY.md)                                                       |
+| Security fix targets      | Critical 3 days, High 30 days, Medium 60 days, Low 90 days                                                                          |
+| Supported package version | The latest minor release                                                                                                            |
+| Supported hosts           | The versions `package.json` declares: `@earendil-works/pi-ai` and `@earendil-works/pi-coding-agent` `>=1.0.0`, Node.js `>=22.19.0`  |
+
+CI tests every change against the pi version pinned in `package-lock.json`. A
+daily workflow also tests pi's `latest` and `next` releases and opens an issue
+labeled `compat` when one fails.
+
+## Verifying Releases
+
+Releases are built and published from this repository by GitHub Actions with
+npm trusted publishing, so each version carries a registry signature and a
+signed provenance attestation that names the workflow and commit that built
+it. Version 1.0.0 predates trusted publishing and has a registry signature but
+no provenance attestation.
+
+To verify an installed version, install it into an empty project and run
+`npm audit signatures`:
+
+```bash
+mkdir verify-pi-actualyze && cd verify-pi-actualyze
+npm init -y >/dev/null
+npm install --ignore-scripts pi-actualyze@<version>
+npm audit signatures
+```
+
+The output must report verified registry signatures and verified attestations
+for `pi-actualyze`. To look at one version's provenance record directly:
+
+```bash
+npm view pi-actualyze@<version> dist.attestations
+```
 
 ## Contributing
 

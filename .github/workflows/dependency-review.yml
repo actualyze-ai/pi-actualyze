@@ -1,0 +1,35 @@
+name: Dependency review
+
+on:
+  pull_request:
+  merge_group:
+
+permissions: {}
+
+concurrency:
+  group: dependency-review-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dependency-review:
+    name: dependency-review
+    uses: actualyze-ai/workflows/.github/workflows/dependency-review.yml@d4a548bca701986d7cbcbae463f1914e5c5283fa # v1.0.0
+    permissions:
+      contents: read
+    with:
+      # lightningcss is MPL-2.0. It is a development-only build tool that
+      # vitest pulls in through vite, and it is never shipped. Each
+      # platform binary is published as its own package.
+      allow-dependencies-licenses: >-
+        pkg:npm/lightningcss,
+        pkg:npm/lightningcss-android-arm64,
+        pkg:npm/lightningcss-darwin-arm64,
+        pkg:npm/lightningcss-darwin-x64,
+        pkg:npm/lightningcss-freebsd-x64,
+        pkg:npm/lightningcss-linux-arm-gnueabihf,
+        pkg:npm/lightningcss-linux-arm64-gnu,
+        pkg:npm/lightningcss-linux-arm64-musl,
+        pkg:npm/lightningcss-linux-x64-gnu,
+        pkg:npm/lightningcss-linux-x64-musl,
+        pkg:npm/lightningcss-win32-arm64-msvc,
+        pkg:npm/lightningcss-win32-x64-msvc

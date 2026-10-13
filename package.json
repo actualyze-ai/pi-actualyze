@@ -21,8 +21,9 @@
 		"lint": "biome check src test",
 		"format": "biome format --write .",
 		"format:check": "biome format .",
-		"test": "vitest run --exclude test/live.test.ts",
+		"test": "vitest run --exclude test/live.test.ts --exclude test/contract.test.ts",
 		"test:live": "ACTUALYZE_LIVE_TEST=1 vitest run test/live.test.ts",
+		"test:contract": "ACTUALYZE_CONTRACT_TEST=1 vitest run test/contract.test.ts",
 		"build": "npm run clean && tsc -p tsconfig.build.json",
 		"pack:check": "npm pack --dry-run",
 		"check": "npm run typecheck && npm run lint && npm run format:check && npm test && npm run build && npm run pack:check"

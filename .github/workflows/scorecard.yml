@@ -1,0 +1,20 @@
+name: Scorecard
+
+on:
+  schedule:
+    - cron: "29 7 * * 1"
+  push:
+    branches: [main]
+  branch_protection_rule:
+
+permissions: {}
+
+jobs:
+  scorecard:
+    name: scorecard
+    uses: actualyze-ai/workflows/.github/workflows/scorecard.yml@d4a548bca701986d7cbcbae463f1914e5c5283fa # v1.0.0
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+      security-events: write
