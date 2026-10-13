@@ -44,8 +44,8 @@ pi --no-extensions -e .
 | CI (`compat.yml`)            | Daily tests against pi's pinned, `latest`, and `next` releases; failures open a `compat` issue         |
 | CI (`contract-tests.yml`)    | Daily `npm run test:contract` against a live endpoint from the `contract-tests` environment            |
 | CI (`scorecard.yml`)         | OpenSSF Scorecard, weekly and on pushes to `main`                                                      |
-| CI (`release.yml`)           | On `v*` tags: the release checks, then a staged npm publish and a draft GitHub Release after approval  |
-| CI (`finalize-release.yml`)  | Run by hand after `npm stage approve`: checks the npm version and the draft, then publishes the draft  |
+| CI (`release.yml`)           | On `v*` tags: the release checks, then `npm publish` and a draft GitHub Release after approval         |
+| CI (`finalize-release.yml`)  | Run by hand after the release: checks the npm version and the draft, then publishes the draft          |
 | Never automatically          | Live tests (`npm run test:live`), which spend real credentials and money                               |
 
 Every workflow is a thin caller of a reusable workflow in

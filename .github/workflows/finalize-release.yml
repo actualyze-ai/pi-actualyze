@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Release tag, such as v1.2.3. Approve its staged npm publish first.
+        description: Release tag, such as v1.2.3. Its npm version must already be public; a staged publish must be approved first.
         required: true
         type: string
 
@@ -17,7 +17,7 @@ concurrency:
 jobs:
   finalize:
     name: finalize
-    uses: actualyze-ai/oss-workflows/.github/workflows/finalize-release.yml@d4a548bca701986d7cbcbae463f1914e5c5283fa # v1.0.0
+    uses: actualyze-ai/oss-workflows/.github/workflows/finalize-release.yml@5afd3201d2dfad253a3df7c90a96e1964b3168e3 # v1.1.0
     permissions:
       actions: read
       contents: write
