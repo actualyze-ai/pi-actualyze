@@ -17,7 +17,7 @@ concurrency:
 jobs:
   codeql:
     name: codeql
-    uses: actualyze-ai/oss-workflows/.github/workflows/codeql.yml@5afd3201d2dfad253a3df7c90a96e1964b3168e3 # v1.1.0
+    uses: actualyze-ai/oss-workflows/.github/workflows/codeql.yml@9a9312da0904398522c8f9b26b166588afe6e1f1 # v1.1.1
     permissions:
       actions: read
       contents: read
