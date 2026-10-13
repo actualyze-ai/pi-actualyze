@@ -698,11 +698,8 @@ describe("dynamic Actualyze catalog lifecycle", () => {
 			}),
 		);
 		expect(controller.getModels().map((model) => model.id)).toEqual(["old-model"]);
-		const refreshedHost = new URL(
-			network.mock.calls.at(-1)?.[0] instanceof Request
-				? (network.mock.calls.at(-1)?.[0] as Request).url
-				: String(network.mock.calls.at(-1)?.[0]),
-		).hostname;
+		const refreshInput = network.mock.calls.at(-1)?.[0];
+		const refreshedHost = new URL(refreshInput instanceof Request ? refreshInput.url : String(refreshInput)).hostname;
 		expect(refreshedHost).toBe("old-target.actualyze.ai");
 
 		// Pending survived: a later refresh matching the login credential

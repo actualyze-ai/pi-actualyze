@@ -69,7 +69,7 @@ describe.skipIf(!liveInference)("Actualyze live inference", () => {
 		expect(first.stopReason).toBe("toolUse");
 		const toolCall = first.content.find((block) => block.type === "toolCall");
 		expect(toolCall).toMatchObject({ name: "echo", arguments: { value: "OK" } });
-		if (!toolCall || toolCall.type !== "toolCall") {
+		if (toolCall?.type !== "toolCall") {
 			throw new Error("Actualyze live model did not return the required tool call");
 		}
 		const result: ToolResultMessage = {
