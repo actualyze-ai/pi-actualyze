@@ -1,4 +1,4 @@
-import { type Context, isContextOverflow, type ToolResultMessage, Type } from "@earendil-works/pi-ai";
+import { type Context, isContextOverflow, normalizeContext, type ToolResultMessage, Type } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import { parseCatalog } from "../src/catalog.js";
 import { createActualyzeProvider } from "../src/provider.js";
@@ -63,7 +63,7 @@ describe("Actualyze native OpenAI contract", () => {
 			],
 		};
 		const first = await controller.provider
-			.streamSimple(model, firstContext, {
+			.streamSimple(model, normalizeContext(firstContext), {
 				...requestOptions,
 				maxTokens: 321,
 				reasoning: "high",
@@ -98,10 +98,10 @@ describe("Actualyze native OpenAI contract", () => {
 		await controller.provider
 			.streamSimple(
 				model,
-				{
+				normalizeContext({
 					systemPrompt: "System contract",
 					messages: [...firstContext.messages, first],
-				},
+				}),
 				requestOptions,
 			)
 			.result();
@@ -151,7 +151,9 @@ describe("Actualyze native OpenAI contract", () => {
 			content: "Check status",
 			timestamp: 1,
 		};
-		const first = await controller.provider.streamSimple(model, { messages: [user], tools }, requestOptions).result();
+		const first = await controller.provider
+			.streamSimple(model, normalizeContext({ messages: [user], tools }), requestOptions)
+			.result();
 		expect(first.stopReason).toBe("toolUse");
 		expect(first.content).toEqual([
 			{
@@ -170,7 +172,7 @@ describe("Actualyze native OpenAI contract", () => {
 			timestamp: 2,
 		};
 		const second = await controller.provider
-			.streamSimple(model, { messages: [user, first, toolResult], tools }, requestOptions)
+			.streamSimple(model, normalizeContext({ messages: [user, first, toolResult], tools }), requestOptions)
 			.result();
 		expect(second.content).toEqual([{ type: "text", text: "Status is green" }]);
 		const continuation = payloads[1]?.messages as Array<Record<string, unknown>>;
@@ -217,7 +219,7 @@ describe("Actualyze native OpenAI contract", () => {
 		const result = await controller.provider
 			.streamSimple(
 				model,
-				{
+				normalizeContext({
 					messages: [
 						{
 							role: "user",
@@ -228,7 +230,7 @@ describe("Actualyze native OpenAI contract", () => {
 							timestamp: 1,
 						},
 					],
-				},
+				}),
 				requestOptions,
 			)
 			.result();
@@ -291,7 +293,7 @@ describe("Actualyze native OpenAI contract", () => {
 		const result = await controller.provider
 			.streamSimple(
 				model,
-				{
+				normalizeContext({
 					messages: [{ role: "user", content: "Check status", timestamp: 1 }],
 					tools: [
 						{
@@ -300,7 +302,7 @@ describe("Actualyze native OpenAI contract", () => {
 							parameters: Type.Object({ key: Type.String() }),
 						},
 					],
-				},
+				}),
 				requestOptions,
 			)
 			.result();
@@ -352,7 +354,9 @@ describe("Actualyze native OpenAI contract", () => {
 		const resultPromise = controller.provider
 			.streamSimple(
 				model,
-				{ messages: [{ role: "user", content: "Cancel me", timestamp: 1 }] },
+				normalizeContext({
+					messages: [{ role: "user", content: "Cancel me", timestamp: 1 }],
+				}),
 				{ ...requestOptions, signal: abort.signal },
 			)
 			.result();
@@ -365,9 +369,9 @@ describe("Actualyze native OpenAI contract", () => {
 
 	it("surfaces a pi-recognized context overflow without misclassifying rate limits", async () => {
 		const [model] = parseCatalog({ data: [modelEntry("overflow-model")] }, baseUrl);
-		const context: Context = {
+		const context = normalizeContext({
 			messages: [{ role: "user", content: "Long prompt", timestamp: 1 }],
-		};
+		});
 		const overflowProvider = createActualyzeProvider({
 			fetch: async () =>
 				new Response(
