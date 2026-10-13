@@ -5,7 +5,9 @@ provider, and the invariants that must not regress.
 
 ## Prerequisites
 
-- Node.js 22.19.0 or newer (CI runs 22 and 24)
+- Node.js 22.22.1 or newer for development, because the pre-commit hook's
+  lint-staged requires it (CI runs 22 and 24; the published package itself
+  supports 22.19.0 or newer)
 - npm (ships with Node)
 - A [pi](https://github.com/earendil-works/pi) checkout or installation of
   1.0.0 or newer if you want to exercise the extension end to end
