@@ -152,8 +152,7 @@ pi --no-extensions -e .
 
 ### Requirements
 
-- pi `1.0.0` or newer (for pi `0.84.2` through 0.x, install pi-actualyze `1.0.0`:
-  `pi install npm:pi-actualyze@1.0.0`)
+- pi `1.0.0` or newer
 - Node.js `22.19.0` or newer for development
 - Network access to `app.actualyze.ai` (or the selected `*.actualyze.ai` target)
 - An Actualyze API key valid for that target
@@ -317,7 +316,7 @@ Actualyze model advertisements are mapped into pi as follows:
 | `modalities.input` includes `image` | `input`         | Enables image input                       |
 | `capabilities.thinking`             | `reasoning`     | Enables reasoning when true               |
 | `capabilities.thinking_adaptive`    | `reasoning`     | Also enables reasoning when true          |
-| `cost.*`                            | `cost`          | Represented as unknown; see below         |
+| `cost`                              | `cost`          | Mapped as an estimate; see below          |
 
 ### Missing Limits
 
@@ -330,14 +329,56 @@ positive value, the provider uses compatibility sentinels:
 These values satisfy pi's model schema; they are not claims about an undisclosed
 upstream limit.
 
+When a model's real limits are smaller, pi compacts the conversation only after
+a request fails with a context-overflow error, and it keeps asking for 16,384
+output tokens. A model with a small context window or output limit can keep
+failing. Set the real limits with pi's `modelOverrides` in `models.json`, which
+lives in pi's agent directory (`~/.pi/agent/models.json` by default):
+
+```json
+{
+  "providers": {
+    "actualyze": {
+      "modelOverrides": {
+        "<model id>": { "contextWindow": 32000, "maxTokens": 4096 }
+      }
+    }
+  }
+}
+```
+
+Use the model id exactly as `/model` shows it. Overrides apply on top of the
+discovered catalog and survive catalog refreshes. Only `modelOverrides` is
+supported for Actualyze models; `models` entries are not (see
+[Security](#security)).
+
+While pi has no Actualyze model list loaded, for example after switching to a
+target that lists no models, a `providers.actualyze` entry in `models.json` makes
+pi send a request for a model it already holds through its own OpenAI client
+instead of this provider. Such a request still goes to the active target with the
+active key, but without the guarded transport, the target checks, or the
+attribution header. Load the list with `/login actualyze` or interactive pi
+before relying on an override.
+
 ### Pricing
 
-Actualyze advertises numeric cost fields but does not declare their currency or
-units. Pi interprets cost fields as USD per million tokens, so the provider does
-not map them.
+Actualyze lists each model's cost in US dollars per million tokens, the unit pi
+uses, and the provider maps it into pi's cost fields:
 
-All cost fields use `0` as an **unknown-price sentinel**. Zero does not mean
-inference is free.
+- `cost.input` and `cost.output` become pi's input and output rates.
+- `cost.cache_read` and `cost.cache_write` become pi's cache rates. When the
+  listing omits one, the provider estimates it from the input rate: the input
+  rate itself for cache reads, and 1.25 times the input rate for cache writes.
+- A malformed `input` or `output` figure becomes `0` for that field only. A
+  malformed cache rate is estimated the same way as a missing one.
+
+When Actualyze lists no cost for a model, all of its cost fields are `0`, an
+**unknown-price sentinel**. Zero does not mean inference is free.
+
+The cost pi shows is an estimate. Each listed rate is the highest among the
+routes your key can reach, so a Virtual Model or Model Group whose members are
+priced differently can read high. Actualyze's own usage metering is the record of
+what a request cost.
 
 ### Modalities
 
@@ -373,6 +414,25 @@ arguments, tool-result continuation, usage, cancellation, routed aliases, error
 redaction, and pi's standard context-overflow classification. Context-overflow
 messages matching pi's standard patterns retain pi's normal compaction behavior.
 
+### Request Attribution
+
+Every inference request carries an `X-Actualyze-Request-Metadata` header:
+
+```json
+{ "agent": "pi", "run_id": "<pi session id>" }
+```
+
+Actualyze's Observability Activity tab shows the `agent` value with the `run_id`
+beneath it and can filter on both, so one pi session's requests can be found
+together. Actualyze records the header on the
+request and does not forward it to the model provider.
+
+The session id is left out when pi supplies none or when it does not fit
+Actualyze's limits for these values (up to 256 characters drawn from letters,
+digits, spaces, and `- : _ @ $ # = / + , .`), so the header never makes a request
+fail. If your pi configuration already sets this header for the model or the
+request, under any letter case, the provider sends your value unchanged.
+
 ## Security
 
 Authenticated traffic is deliberately constrained:
@@ -395,6 +455,9 @@ Authenticated traffic is deliberately constrained:
 - catalog and error bodies are size-bounded;
 - provider error bodies and headers are sanitized before pi receives them; and
 - API keys and authorization headers are redacted from transport errors.
+
+These guarantees cover requests this provider sends. One `models.json`
+configuration makes pi bypass it; see [Missing Limits](#missing-limits).
 
 Do not commit credentials, `.env` files, live API response captures, or generated pi
 credential stores. Live tests are excluded from the default test suite and require
@@ -430,16 +493,19 @@ The provider is designed to fail without corrupting a valid catalog:
 | `pi list`            | Show installed pi packages                         |
 | `pi remove …`        | Uninstall the package                              |
 
-### `--list-models` Caveat
+### Print Mode and Model Listing
 
-In pi 0.84.2, `--list-models` can reach availability lookup before the asynchronous
-cache refresh triggered by native extension registration completes. A fresh process
-may therefore print no dynamic Actualyze models even when matching credentials and a
-persisted catalog exist.
+`pi -p` and `pi --list-models` use the saved model list and never fetch it from
+Actualyze. pi fetches the list on `/login actualyze`, after interactive pi starts,
+and when `/model` opens. A new environment that has only `ACTUALYZE_API_KEY`
+set and no saved list therefore shows no Actualyze models in these modes. Start
+interactive pi once, or run `/login actualyze`, to save the list.
 
-Use an ordinary pi invocation and `/model`; do **not** add `models.json`. A brand-new
-process using only environment credentials has the same upstream lifecycle
-limitation because `--list-models` does not initiate a dynamic provider refresh.
+With only `ACTUALYZE_API_KEY` set, `pi -p` without `--model` sometimes starts
+with no model selected and reports "No API key found for the selected model."
+This is a startup race in pi, and it happens more often when `models.json`
+exists. Pass `--model actualyze/<model id>`, or log in with `/login actualyze` so
+that pi stores the credential.
 
 ## Troubleshooting
 
@@ -458,12 +524,8 @@ pi list
 pi --version
 ```
 
-The package requires pi 1.0.0 or newer. For pi 0.84.2 through 0.x, install
-pi-actualyze 1.0.0, the last release for pi 0.x:
-
-```bash
-pi install npm:pi-actualyze@1.0.0
-```
+The package requires pi 1.0.0 or newer. Upgrade pi if `pi --version` reports
+an older release.
 
 ### `actualyze` does not appear in `/login`
 
@@ -504,14 +566,18 @@ Check that:
 
 The provider intentionally rejects redirects and non-JSON responses.
 
-### Models do not appear in `--list-models`
+### Models do not appear in `--list-models` or `pi -p`
 
-See the [`--list-models` caveat](#--list-models-caveat). Start interactive pi and
-open `/model` instead.
+These modes show only the saved model list. Start interactive pi once, or run
+`/login actualyze`, to fetch and save it. See
+[Print Mode and Model Listing](#print-mode-and-model-listing).
 
 ### Costs display as zero
 
-This means pricing is unknown to the plugin, not free. See [Pricing](#pricing).
+Zero means Actualyze lists no cost for the model, so its price is unknown, not
+free. See [Pricing](#pricing). After an upgrade from pi-actualyze 2.0.0 or
+earlier, a saved model list shows zero costs until pi next refreshes it from
+Actualyze.
 
 ## Development
 
@@ -614,13 +680,13 @@ Tests, `.env.example`, credentials, build output, and coverage are excluded.
 pi-actualyze is maintained by [@jsquyres](https://github.com/jsquyres) and
 [@dpippenger](https://github.com/dpippenger) at Actualyze AI.
 
-| Topic                     | Support                                                                                                                             |
-| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| Bugs and questions        | [GitHub issues](https://github.com/actualyze-ai/pi-actualyze/issues)                                                                |
-| Security reports          | Private vulnerability reporting, as described in [SECURITY.md](./SECURITY.md)                                                       |
-| Security fix targets      | Critical 3 days, High 30 days, Medium 60 days, Low 90 days                                                                          |
-| Supported package version | The latest minor release                                                                                                            |
-| Supported hosts           | The versions `package.json` declares: `@earendil-works/pi-ai` and `@earendil-works/pi-coding-agent` `>=1.0.0`, Node.js `>=22.19.0`  |
+| Topic                     | Support                                                                                                                            |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| Bugs and questions        | [GitHub issues](https://github.com/actualyze-ai/pi-actualyze/issues)                                                               |
+| Security reports          | Private vulnerability reporting, as described in [SECURITY.md](./SECURITY.md)                                                      |
+| Security fix targets      | Critical 3 days, High 30 days, Medium 60 days, Low 90 days                                                                         |
+| Supported package version | The latest minor release                                                                                                           |
+| Supported hosts           | The versions `package.json` declares: `@earendil-works/pi-ai` and `@earendil-works/pi-coding-agent` `>=1.0.0`, Node.js `>=22.19.0` |
 
 CI tests every change against the pi version pinned in `package-lock.json`. A
 daily workflow also tests pi's `latest` and `next` releases and opens an issue
@@ -631,8 +697,7 @@ labeled `compat` when one fails.
 Releases are built and published from this repository by GitHub Actions with
 npm trusted publishing, so each version carries a registry signature and a
 signed provenance attestation that names the workflow and commit that built
-it. Version 1.0.0 predates trusted publishing and has a registry signature but
-no provenance attestation.
+it.
 
 To verify an installed version, install it into an empty project and run
 `npm audit signatures`:

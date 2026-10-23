@@ -98,9 +98,11 @@ Key behaviors, each backed by tests:
   unsafe entry rejects the whole generation. The previous generation stays
   intact. There is no partial publication.
 - **Sentinels, not guesses**: missing limits become documented pi schema
-  fallbacks (128,000 context / 16,384 output). All costs are `0`, an
-  unknown-price sentinel, until Actualyze confirms currency and units.
-  PDF/audio/video advertisements are not mapped to pi modalities.
+  fallbacks (128,000 context / 16,384 output), and a model with no listed
+  cost keeps `0` costs, an unknown-price sentinel. The one estimate is a
+  missing cache rate, which is derived from the listed input rate (see the
+  README's Pricing section). PDF/audio/video advertisements are not mapped
+  to pi modalities.
 - **Target-scoped cache** (`provider.ts`): a persisted catalog is restored
   only when every model's `baseUrl` matches the currently resolved target.
   Mismatches are discarded, not displayed.
@@ -108,6 +110,11 @@ Key behaviors, each backed by tests:
   when the catalog attributes the model ID to another target, when the
   model object's base URL does not match the active target, or when the ID
   is absent from a non-empty discovered catalog.
+- **Request attribution** (`provider.ts`): inference requests carry an
+  `X-Actualyze-Request-Metadata` header naming pi as the agent and the pi
+  session as the run. A header the user already set, under any letter case,
+  is left alone, and a session id outside Actualyze's value rules is
+  dropped, because a malformed header fails the request.
 
 ## Subtleties worth knowing before you edit `provider.ts`
 
@@ -171,20 +178,31 @@ superseded refresh belongs inside `update`, not before the publish call.
 
 ## Caveats
 
-- **`--list-models` race (pi 0.84.2).** The CLI's availability lookup can
-  run before the asynchronous refresh triggered by extension registration
-  completes, printing no dynamic models. Interactive `/model` is reliable.
-- **Costs are always zero.** This is an unknown-price sentinel, not free
-  inference. Actualyze advertises `cost.input`, `cost.output`,
-  `cost.cache_read`, and `cost.cache_write` without declaring currency or
-  units, and pi interprets cost fields as USD per million tokens.
+- **Print mode and `--list-models` never refresh.** pi restores the saved
+  catalog at startup without network, and only interactive mode, RPC mode,
+  and `/login` fetch a new one. With only `ACTUALYZE_API_KEY` set, pi's
+  startup can also select no model in `pi -p` without `--model`: the refresh
+  that native provider registration starts races the one startup awaits.
+  A stored credential or an explicit `--model` avoids it.
+- **Costs are estimates.** Actualyze lists rates in US dollars per million
+  tokens, the unit pi uses. Each rate is the highest among the key's
+  reachable routes, and a missing cache rate is derived from the input rate.
+  A model with no listed cost shows `0`, an unknown-price sentinel, not free
+  inference.
 - **Advisory capability flags.** `streaming: false` and `tool_use: false`
   in the Actualyze catalog are advisory. Models are never filtered on these
   flags; a model-specific incompatibility belongs in an explicit
   compatibility rule, not a catalog filter.
-- **`models.json` entries are not supported.** Manually defined Actualyze
-  models are refused by the stream guard because the provider's discovered
-  catalog is authoritative.
+- **`models.json` `models` entries are not supported; `modelOverrides` is.**
+  Manually defined Actualyze models are refused by the stream guard because
+  the provider's discovered catalog is authoritative. pi applies
+  `providers.actualyze.modelOverrides` on top of the discovered models
+  without changing their id or base URL, so the guard accepts them;
+  `test/models-lifecycle.test.ts` covers this through pi's real runtime.
+  While the catalog is empty, any `providers.actualyze` entry makes pi send
+  a stream for a model the session already holds through its built-in
+  OpenAI Completions code instead of this provider, so the guarded fetch,
+  the target guard, and the attribution header do not apply to it.
 - **The prepare script tolerates a missing husky.** `pi install git:...`
   runs `npm install --omit=dev` in the clone, which still executes
   `prepare`. The script swallows only `ERR_MODULE_NOT_FOUND` so hook
