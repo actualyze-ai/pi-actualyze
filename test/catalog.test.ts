@@ -147,10 +147,19 @@ describe("Actualyze catalog conversion", () => {
 			contextWindow: DEFAULT_CONTEXT_WINDOW,
 			maxTokens: DEFAULT_MAX_TOKENS,
 		});
+		expect(models[0]?.cost).toEqual({
+			input: 0,
+			output: 0,
+			cacheRead: 0,
+			cacheWrite: 0,
+		});
 		expect(models[1]?.input).toEqual(["text", "image"]);
-		expect(models[2]).toMatchObject({
-			contextWindow: 272_000,
-			cost: { input: 0, output: 0 },
+		expect(models[2]).toMatchObject({ contextWindow: 272_000 });
+		expect(models[2]?.cost).toEqual({
+			input: 1,
+			output: 2,
+			cacheRead: 1,
+			cacheWrite: 1.25,
 		});
 	});
 
@@ -167,5 +176,93 @@ describe("Actualyze catalog conversion", () => {
 			baseUrl,
 		);
 		expect(models).toHaveLength(1);
+	});
+});
+
+describe("Actualyze catalog cost", () => {
+	const unknownCost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+	const costOf = (cost: unknown) => parseCatalog({ data: [modelEntry("priced", { cost })] }, baseUrl)[0]?.cost;
+
+	it.each([
+		["null", null],
+		["a bare number", 3],
+	])("keeps the unknown-price 0 for every rate when cost is %s", (_label, cost) => {
+		expect(costOf(cost)).toEqual(unknownCost);
+	});
+
+	it("maps each listed rate, in dollars per million tokens, to the matching pi rate", () => {
+		const listed = { input: 3, output: 15, cache_read: 0.3, cache_write: 6 };
+		expect(costOf(listed)).toEqual({
+			input: 3,
+			output: 15,
+			cacheRead: 0.3,
+			cacheWrite: 6,
+		});
+	});
+
+	it("estimates unlisted cache rates from the input rate", () => {
+		// Cache reads fall back to the input rate, cache writes to 1.25 times it.
+		const listed = { input: 2, output: 8 };
+		expect(costOf(listed)).toEqual({
+			input: 2,
+			output: 8,
+			cacheRead: 2,
+			cacheWrite: 2.5,
+		});
+	});
+
+	it("keeps listed zero cache rates instead of estimating them", () => {
+		const listed = { input: 3, output: 15, cache_read: 0, cache_write: 0 };
+		expect(costOf(listed)).toEqual({
+			input: 3,
+			output: 15,
+			cacheRead: 0,
+			cacheWrite: 0,
+		});
+	});
+
+	const malformedRates = [
+		["negative", -1],
+		["infinite", Number.POSITIVE_INFINITY],
+		["string-typed", "3"],
+	];
+
+	it.each(malformedRates)("falls back to 0 for a %s input or output rate alone", (_label, malformed) => {
+		const [badInput, badOutput] = parseCatalog(
+			{
+				data: [
+					modelEntry("bad-input", { cost: { input: malformed, output: 15 } }),
+					modelEntry("bad-output", { cost: { input: 3, output: malformed } }),
+				],
+			},
+			baseUrl,
+		);
+		expect(badInput?.cost).toEqual({
+			input: 0,
+			output: 15,
+			cacheRead: 0,
+			cacheWrite: 0,
+		});
+		expect(badOutput?.cost).toEqual({
+			input: 3,
+			output: 0,
+			cacheRead: 3,
+			cacheWrite: 3.75,
+		});
+	});
+
+	it.each(malformedRates)("estimates a %s cache rate from the input rate", (_label, malformed) => {
+		const listed = {
+			input: 4,
+			output: 8,
+			cache_read: malformed,
+			cache_write: malformed,
+		};
+		expect(costOf(listed)).toEqual({
+			input: 4,
+			output: 8,
+			cacheRead: 4,
+			cacheWrite: 5,
+		});
 	});
 });

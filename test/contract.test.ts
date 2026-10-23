@@ -22,6 +22,14 @@ function record(value: unknown): Record<string, unknown> {
 	return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
 }
 
+function isObject(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isRate(value: unknown): value is number {
+	return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+
 describe.skipIf(!enabled)("Actualyze /models contract", () => {
 	let entries: RawEntry[] = [];
 	let models: readonly Model<"openai-completions">[] = [];
@@ -71,6 +79,27 @@ describe.skipIf(!enabled)("Actualyze /models contract", () => {
 			const capabilities = record(entry.capabilities);
 			const reasoning = capabilities.thinking === true || capabilities.thinking_adaptive === true;
 			expect(model.reasoning, entry.id).toBe(reasoning);
+		});
+	});
+
+	it("carries each advertised cost into the model's rates", () => {
+		entries.forEach((entry, index) => {
+			const cost = entry.cost;
+			if (!isObject(cost)) return;
+			// The object is listed only when both required rates are known, and a
+			// cache rate only when it is known.
+			expect(isRate(cost.input), `${entry.id} cost.input`).toBe(true);
+			expect(isRate(cost.output), `${entry.id} cost.output`).toBe(true);
+			for (const field of ["cache_read", "cache_write"]) {
+				if (cost[field] !== undefined) expect(isRate(cost[field]), `${entry.id} cost.${field}`).toBe(true);
+			}
+			const input = cost.input as number;
+			expect(models[index]?.cost, entry.id).toEqual({
+				input,
+				output: cost.output,
+				cacheRead: cost.cache_read ?? input,
+				cacheWrite: cost.cache_write ?? input * 1.25,
+			});
 		});
 	});
 });

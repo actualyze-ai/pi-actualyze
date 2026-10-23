@@ -77,6 +77,37 @@ function advertisedReasoning(entry: Record<string, unknown>): boolean {
 	return isRecord(capabilities) && (capabilities.thinking === true || capabilities.thinking_adaptive === true);
 }
 
+/**
+ * Cache-write rate as a multiple of the input rate, used when a listed cost
+ * omits `cache_write`. It is the 5-minute cache-write rate of Anthropic models;
+ * 1-hour writes cost more.
+ */
+const CACHE_WRITE_INPUT_MULTIPLIER = 1.25;
+
+function nonNegativeFinite(value: unknown): number | undefined {
+	return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+/**
+ * Actualyze lists cost in US dollars per million tokens, the unit pi uses, and
+ * omits the object when a required rate is unknown; that keeps the 0 sentinel.
+ * A malformed `input` or `output` figure falls back to 0 on its own. A missing
+ * or malformed cache rate is estimated from the input rate: cache reads are
+ * charged at the input rate, an upper bound since they cost less, and cache
+ * writes at 1.25 times input.
+ */
+function advertisedCost(entry: Record<string, unknown>): Model<"openai-completions">["cost"] {
+	const cost = entry.cost;
+	if (!isRecord(cost)) return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+	const input = nonNegativeFinite(cost.input) ?? 0;
+	return {
+		input,
+		output: nonNegativeFinite(cost.output) ?? 0,
+		cacheRead: nonNegativeFinite(cost.cache_read) ?? input,
+		cacheWrite: nonNegativeFinite(cost.cache_write) ?? input * CACHE_WRITE_INPUT_MULTIPLIER,
+	};
+}
+
 function toModel(entry: Record<string, unknown>, id: string, baseUrl: string): Model<"openai-completions"> {
 	return {
 		id,
@@ -86,7 +117,7 @@ function toModel(entry: Record<string, unknown>, id: string, baseUrl: string): M
 		baseUrl,
 		reasoning: advertisedReasoning(entry),
 		input: advertisedImageInput(entry) ? ["text", "image"] : ["text"],
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		cost: advertisedCost(entry),
 		contextWindow:
 			positiveSafeInteger(entry.context_window) ?? positiveSafeInteger(entry.max_model_len) ?? DEFAULT_CONTEXT_WINDOW,
 		maxTokens: positiveSafeInteger(entry.max_output_tokens) ?? DEFAULT_MAX_TOKENS,
