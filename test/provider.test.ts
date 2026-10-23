@@ -878,6 +878,43 @@ describe("dynamic Actualyze catalog lifecycle", () => {
 		expect(publish.mock.calls[0]?.[0].persist?.models).toHaveLength(2);
 	});
 
+	it("replaces a restored zero-cost generation with the listed costs on the next network refresh", async () => {
+		const network = vi.fn<typeof fetch>(async () =>
+			jsonResponse({
+				data: [
+					modelEntry("priced", {
+						cost: { input: 3, output: 15, cache_read: 0.3 },
+					}),
+				],
+			}),
+		);
+		const controller = createActualyzeProvider({ fetch: network });
+		// The stored generation holds the zero unknown-price sentinel for every rate.
+		const [zeroCost] = parseCatalog({ data: [modelEntry("priced")] }, "https://customer.actualyze.ai/openai/v1");
+		const stored = { models: [zeroCost] };
+		const publications: ModelsPublication[] = [];
+		const publish = async (publication: ModelsPublication) => {
+			publications.push(publication);
+			publication.update?.();
+			return true;
+		};
+
+		await controller.provider.refreshModels?.(refreshContext({ allowNetwork: false, stored, publish }));
+		expect(controller.getModels()[0]?.cost).toEqual({
+			input: 0,
+			output: 0,
+			cacheRead: 0,
+			cacheWrite: 0,
+		});
+		expect(publications.at(-1)?.persist).toBeUndefined();
+		expect(network).not.toHaveBeenCalled();
+
+		await controller.provider.refreshModels?.(refreshContext({ stored, publish }));
+		const listed = { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 };
+		expect(controller.getModels()[0]?.cost).toEqual(listed);
+		expect(publications.at(-1)?.persist?.models).toEqual([expect.objectContaining({ id: "priced", cost: listed })]);
+	});
+
 	it("retains the previous generation when a refresh is invalid", async () => {
 		const responses = [
 			jsonResponse(catalogPayload),

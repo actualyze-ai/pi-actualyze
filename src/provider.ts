@@ -6,7 +6,9 @@ import {
 	isModelType,
 	type Model,
 	type Provider,
+	type ProviderHeaders,
 	type RefreshModelsContext,
+	type StreamOptions,
 } from "@earendil-works/pi-ai";
 import { openAICompletionsApi } from "@earendil-works/pi-ai/compat";
 import { ActualyzeClient, type ActualyzeClientOptions } from "./client.js";
@@ -15,6 +17,7 @@ import {
 	ACTUALYZE_DEFAULT_TARGET,
 	ACTUALYZE_PROVIDER_ID,
 	ACTUALYZE_PROVIDER_NAME,
+	ACTUALYZE_REQUEST_METADATA_HEADER,
 	ACTUALYZE_TARGET_ENV,
 } from "./constants.js";
 import {
@@ -141,6 +144,44 @@ function refreshConfiguration(
 	} catch {
 		return undefined;
 	}
+}
+
+/**
+ * Actualyze accepts request-metadata values of up to 256 characters drawn from
+ * letters, digits, spaces and `-:_@$#=/+,.`, and rejects the whole request when
+ * the header breaks these rules.
+ */
+const REQUEST_METADATA_VALUE = /^[-a-zA-Z0-9 :_@$#=/+,.]{1,256}$/u;
+
+function hasHeader(headers: ProviderHeaders | Record<string, string> | undefined, name: string): boolean {
+	const wanted = name.toLowerCase();
+	return headers !== undefined && Object.keys(headers).some((key) => key.toLowerCase() === wanted);
+}
+
+/**
+ * Names pi as the calling agent and the pi session as the run, so Actualyze
+ * groups a session's requests together. A header the user configured on the
+ * model or the request is kept as is. A session id Actualyze would reject is
+ * left out rather than failing the request.
+ */
+function withRequestMetadata(
+	model: Model<"openai-completions">,
+	streamOptions: StreamOptions | undefined,
+): ProviderHeaders | undefined {
+	const headers = streamOptions?.headers;
+	if (
+		hasHeader(model.headers, ACTUALYZE_REQUEST_METADATA_HEADER) ||
+		hasHeader(headers, ACTUALYZE_REQUEST_METADATA_HEADER)
+	) {
+		return headers;
+	}
+	const metadata: Record<string, string> = { agent: "pi" };
+	const sessionId = streamOptions?.sessionId;
+	if (sessionId !== undefined && REQUEST_METADATA_VALUE.test(sessionId)) metadata.run_id = sessionId;
+	return {
+		...headers,
+		[ACTUALYZE_REQUEST_METADATA_HEADER]: JSON.stringify(metadata),
+	};
 }
 
 function streamBaseUrl(env: Record<string, string> | undefined): string {
@@ -312,6 +353,7 @@ export function createActualyzeProvider(options: ActualyzeProviderOptions = {}):
 			assertModelOnActiveTarget(model, activeBaseUrl);
 			return streams.stream(model, context, {
 				...streamOptions,
+				headers: withRequestMetadata(model, streamOptions),
 				fetch: createGuardedFetch(activeBaseUrl, underlyingFetch),
 			});
 		},
@@ -320,6 +362,7 @@ export function createActualyzeProvider(options: ActualyzeProviderOptions = {}):
 			assertModelOnActiveTarget(model, activeBaseUrl);
 			return streams.streamSimple(model, context, {
 				...streamOptions,
+				headers: withRequestMetadata(model, streamOptions),
 				fetch: createGuardedFetch(activeBaseUrl, underlyingFetch),
 			});
 		},

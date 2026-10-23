@@ -1,4 +1,12 @@
-import { type Context, isContextOverflow, normalizeContext, type ToolResultMessage, Type } from "@earendil-works/pi-ai";
+import {
+	type AssistantMessageEventStream,
+	type Context,
+	isContextOverflow,
+	normalizeContext,
+	type Provider,
+	type ToolResultMessage,
+	Type,
+} from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import { parseCatalog } from "../src/catalog.js";
 import { createActualyzeProvider } from "../src/provider.js";
@@ -408,5 +416,106 @@ describe("Actualyze native OpenAI contract", () => {
 			.streamSimple(model, context, { ...requestOptions, maxRetries: 0 })
 			.result();
 		expect(isContextOverflow(throttled, model.contextWindow)).toBe(false);
+	});
+});
+
+describe("Actualyze request-metadata header", () => {
+	const metadataHeader = "X-Actualyze-Request-Metadata";
+	const [model] = parseCatalog({ data: [modelEntry("metadata-model")] }, baseUrl);
+	const context = normalizeContext({
+		messages: [{ role: "user", content: "Hello", timestamp: 1 }],
+	});
+
+	// Sends one request through a fresh provider and returns the headers its
+	// fetch received.
+	async function sentHeaders(
+		send: (provider: Provider<"openai-completions">) => AssistantMessageEventStream,
+	): Promise<Headers> {
+		const requests: Request[] = [];
+		const network = vi.fn<typeof fetch>(async (input, init) => {
+			requests.push(input instanceof Request ? input : new Request(input, init));
+			return sse([chunk({ content: "ok" }), chunk({}, "stop")]);
+		});
+		const result = await send(createActualyzeProvider({ fetch: network }).provider).result();
+		expect(result.stopReason).toBe("stop");
+		expect(requests).toHaveLength(1);
+		return requests[0].headers;
+	}
+
+	function sentMetadata(headers: Headers): unknown {
+		return JSON.parse(headers.get(metadataHeader) ?? "null");
+	}
+
+	it("names pi as the agent and the session as the run on streamSimple", async () => {
+		const sessionId = "4f9c2a7e-1b3d-4e8f-9a6c-2d5e7f8a9b0c";
+		const headers = await sentHeaders((provider) =>
+			provider.streamSimple(model, context, { ...requestOptions, sessionId }),
+		);
+		expect(sentMetadata(headers)).toEqual({ agent: "pi", run_id: sessionId });
+	});
+
+	it("names only pi as the agent on stream when no session id is given", async () => {
+		const headers = await sentHeaders((provider) => provider.stream(model, context, requestOptions));
+		expect(sentMetadata(headers)).toEqual({ agent: "pi" });
+	});
+
+	it.each([
+		["exactly 256 characters long", "s".repeat(256)],
+		["made of letters, digits, a space and every allowed mark", "Run 42 -:_@$#=/+,."],
+	])("sends a session id %s as the run", async (_label, sessionId) => {
+		const headers = await sentHeaders((provider) =>
+			provider.streamSimple(model, context, { ...requestOptions, sessionId }),
+		);
+		expect(sentMetadata(headers)).toEqual({ agent: "pi", run_id: sessionId });
+	});
+
+	it.each([
+		["longer than 256 characters", "s".repeat(257)],
+		["that is empty", ""],
+		["containing a newline", "session\nid"],
+		["containing an exclamation mark", "session!"],
+	])("leaves out a session id %s", async (_label, sessionId) => {
+		const headers = await sentHeaders((provider) =>
+			provider.streamSimple(model, context, { ...requestOptions, sessionId }),
+		);
+		expect(sentMetadata(headers)).toEqual({ agent: "pi" });
+	});
+
+	it("keeps a request-metadata header from the request options, in any letter case, unchanged", async () => {
+		const custom = '{"agent":"custom"}';
+		const headers = await sentHeaders((provider) =>
+			provider.streamSimple(model, context, {
+				...requestOptions,
+				sessionId: "session-1",
+				headers: { "x-actualyze-request-metadata": custom },
+			}),
+		);
+		expect(headers.get(metadataHeader)).toBe(custom);
+	});
+
+	it("keeps a request-metadata header from the model, in any letter case, unchanged", async () => {
+		const custom = '{"agent":"custom"}';
+		const configured = {
+			...model,
+			headers: { "X-ACTUALYZE-REQUEST-METADATA": custom },
+		};
+		const headers = await sentHeaders((provider) =>
+			provider.streamSimple(configured, context, {
+				...requestOptions,
+				sessionId: "session-1",
+			}),
+		);
+		expect(headers.get(metadataHeader)).toBe(custom);
+	});
+
+	it("passes other request headers through alongside the metadata header", async () => {
+		const headers = await sentHeaders((provider) =>
+			provider.streamSimple(model, context, {
+				...requestOptions,
+				headers: { "X-Trace-Id": "trace-7" },
+			}),
+		);
+		expect(headers.get("x-trace-id")).toBe("trace-7");
+		expect(sentMetadata(headers)).toEqual({ agent: "pi" });
 	});
 });
