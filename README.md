@@ -38,6 +38,9 @@ the discovered models available immediately. Open pi's model selector:
 
 Select any model under the `actualyze` provider.
 
+Upgrading from 2.x? A key set only through `ACTUALYZE_API_KEY` now needs a
+target as well; see [Upgrading to 3.0](#upgrading-to-30).
+
 ## The Problem
 
 An Actualyze deployment can expose a changing catalog of direct models, routed
@@ -57,9 +60,12 @@ Completions implementation.
 
 The provider owns the complete lifecycle:
 
-1. **Configuration:** `/login actualyze` asks only for an API key. The target
-   defaults to production (`app`), and a target label always maps to the fixed
-   endpoint `https://<target>.actualyze.ai/openai/v1`.
+1. **Configuration:** `/login actualyze` asks only for an API key and logs in
+   to production (`app`) unless another endpoint is selected. A target label
+   always maps to the fixed endpoint `https://<target>.actualyze.ai/openai/v1`,
+   and a launcher can name any other Actualyze environment with
+   `ACTUALYZE_OPENAI_BASE_URL`. A key from the environment is sent only to an
+   endpoint the environment names.
 
 2. **Credential validation:** Before pi saves anything, the provider sends an
    authenticated `GET /models` request through a guarded transport. Invalid
@@ -74,9 +80,9 @@ The provider owns the complete lifecycle:
    of silently presenting a partial catalog. An existing valid generation remains
    intact when refresh fails.
 
-5. **Target-scoped persistence:** Pi can restore a cached catalog on startup only
-   when every cached model belongs to `actualyze` and points at the active target's
-   exact base URL. Switching targets discards mismatched cached and in-memory
+5. **Endpoint-scoped persistence:** Pi can restore a cached catalog on startup only
+   when every cached model belongs to `actualyze` and points at the active endpoint's
+   exact base URL. Switching endpoints discards mismatched cached and in-memory
    catalogs.
 
 6. **Native inference:** Requests use pi's OpenAI Chat Completions adapter with a
@@ -99,7 +105,7 @@ pi install npm:pi-actualyze
 To pin a version:
 
 ```bash
-pi install npm:pi-actualyze@2.1.0
+pi install npm:pi-actualyze@3.0.0
 ```
 
 Uninstall with:
@@ -154,8 +160,8 @@ pi --no-extensions -e .
 
 - pi `1.0.0` or newer
 - Node.js `22.19.0` or newer for development
-- Network access to `app.actualyze.ai` (or the selected `*.actualyze.ai` target)
-- An Actualyze API key valid for that target
+- Network access to `app.actualyze.ai` (or the selected target or base URL)
+- An Actualyze API key valid for that endpoint
 
 ## Configuration
 
@@ -191,19 +197,35 @@ pi --actualyze-target staging
 /login actualyze
 ```
 
-The target is resolved in this order:
+The endpoint is resolved in this order:
 
-| Priority | Source                    | Example                         |
-| -------- | ------------------------- | ------------------------------- |
-| 1        | Saved credential's target | set by the last `/login`        |
-| 2        | `--actualyze-target` flag | `pi --actualyze-target staging` |
-| 3        | `ACTUALYZE_TARGET`        | `ACTUALYZE_TARGET=staging pi`   |
-| 4        | Default                   | `app`                           |
+| Priority | Source                                                        | Example                         |
+| -------- | ------------------------------------------------------------- | ------------------------------- |
+| 1        | Saved credential's endpoint                                   | set by the last `/login`        |
+| 2        | The target with `ACTUALYZE_OPENAI_BASE_URL` (they must agree) | `pi --actualyze-target staging` |
+| 3        | Production (`app`), for `/login` only                         | `/login actualyze`              |
+
+The target is the `--actualyze-target` flag when it is set, else
+`ACTUALYZE_TARGET`. A target or `ACTUALYZE_OPENAI_BASE_URL` alone names the
+endpoint (see [below](#another-actualyze-environment-by-url) for the base URL).
+They can both be set only when they name the same endpoint; when they disagree,
+the provider stays unavailable and sends nothing.
+
+The target `-` selects no `*.actualyze.ai` target, which leaves the choice to
+`ACTUALYZE_OPENAI_BASE_URL`. Set it as `ACTUALYZE_TARGET=-` or
+`--actualyze-target=-`: pi reads a `-` after a space as an option of its own and
+exits with `Unknown option: -`. A label works either way, as in
+`--actualyze-target staging`.
+
+Production is a default only for `/login`, whose prompt names the host you are
+entering a key for. A key from `ACTUALYZE_API_KEY` is never sent to production
+unless a target or base URL names it: with only the key set, the provider is
+unavailable.
 
 At login there is no saved credential yet, so the flag, the environment
-variable, or the default decides. A saved credential keeps the target it was
-created with; to move a saved login to another environment, start pi with the
-flag and run `/login actualyze` again.
+variables, or the production default decide. A saved credential keeps the
+endpoint it was created with; to move a saved login to another environment,
+start pi with the flag and run `/login actualyze` again.
 
 The target `staging` resolves only to:
 
@@ -217,19 +239,37 @@ control characters, and labels longer than 63 characters. Uppercase ASCII letter
 are normalized to lowercase. Login rejects an invalid label before asking for
 the API key.
 
+### Another Actualyze Environment by URL
+
+A tool that launches pi for one run against an Actualyze environment outside
+`*.actualyze.ai` sets `ACTUALYZE_OPENAI_BASE_URL` to that environment's OpenAI
+base URL, for example `https://actualyze.example.com/openai/v1`, together with
+the run's key in `ACTUALYZE_API_KEY`. The provider then discovers models and
+sends inference there, and nowhere else.
+
+The value must be an absolute `https` URL without a user name, password, query,
+or fragment. Plain `http` is accepted only for `localhost`, `127.0.0.1`, and
+`[::1]`, such as a local Actualyze stack. A value that breaks these rules makes
+the provider unavailable instead of being ignored, because the key set beside it
+belongs to that endpoint. `/login actualyze` uses the variable too when it is
+set, and the saved credential keeps the base URL.
+
 ### Environment Configuration
 
-For non-interactive authentication, set the API key before starting pi:
+For non-interactive authentication, set the API key and the endpoint before
+starting pi:
 
 ```bash
 export ACTUALYZE_API_KEY='your-api-key'
+export ACTUALYZE_TARGET=app
 pi
 ```
 
-| Variable            | Required | Description                                                            |
-| ------------------- | -------- | ---------------------------------------------------------------------- |
-| `ACTUALYZE_API_KEY` | Yes      | API key for the target                                                 |
-| `ACTUALYZE_TARGET`  | No       | Non-production DNS label; defaults to `app`; `--actualyze-target` wins |
+| Variable                    | Required                                  | Description                                                                          |
+| --------------------------- | ----------------------------------------- | ------------------------------------------------------------------------------------ |
+| `ACTUALYZE_API_KEY`         | Yes                                       | API key for the endpoint                                                             |
+| `ACTUALYZE_TARGET`          | Unless `ACTUALYZE_OPENAI_BASE_URL` is set | DNS label, such as `app` for production; `-` selects none; `--actualyze-target` wins |
+| `ACTUALYZE_OPENAI_BASE_URL` | Unless a target is set                    | Full OpenAI base URL of an Actualyze environment                                     |
 
 Stored credential fields take precedence over the corresponding environment
 variables. Invalid ambient configuration is treated as unavailable authentication.
@@ -241,7 +281,9 @@ resolves the credential.
 ### Credential Storage and Logout
 
 Pi stores the API key in its provider credential store and stores only the
-non-secret target in credential metadata:
+non-secret endpoint in credential metadata: the target, or
+`ACTUALYZE_OPENAI_BASE_URL` for a login made with that variable set. A
+production login looks like this:
 
 ```json
 {
@@ -267,9 +309,12 @@ exists. Environment variables can still provide authentication if they remain se
 The provider requests:
 
 ```http
-GET https://<target>.actualyze.ai/openai/v1/models
+GET <base-url>/models
 Authorization: Bearer <api-key>
 ```
+
+The base URL is `https://<target>.actualyze.ai/openai/v1` for a target, or the
+value of `ACTUALYZE_OPENAI_BASE_URL`.
 
 The list response, not a bundled static file, is authoritative for model membership.
 The provider registers exactly one model for every unique valid list ID.
@@ -299,7 +344,16 @@ interactive deadline.
 - Valid `Retry-After` values are honored only when they fit the remaining budget.
 - Cancellation stops active fetches, response reads, and retry delays.
 - Failed refresh never replaces a previously accepted generation.
-- A cached generation is restored only for the exact active target URL.
+- A cached generation is restored only for the exact active base URL.
+- pi resolves `--provider actualyze --model <id>` (or `--model actualyze/<id>`)
+  before its own network refresh. When the environment names the key and the
+  endpoint, and pi's cache has no catalog for that endpoint listing `<id>`, a
+  run started that way fetches the catalog while pi loads the extension. The
+  first run then works with nothing cached, and the catalog is stored for later
+  runs. Until the fetch ends, pi waits before it starts, for at most the
+  10-second catalog budget when the endpoint does not answer. A model pattern
+  that is not an exact ID, such as one with a `:high` thinking suffix, always
+  fetches. `--offline` skips the fetch.
 - Same-target key rotation persists the newly validated login catalog instead of
   restoring the previous key's catalog.
 
@@ -355,8 +409,8 @@ supported for Actualyze models; `models` entries are not (see
 While pi has no Actualyze model list loaded, for example after switching to a
 target that lists no models, a `providers.actualyze` entry in `models.json` makes
 pi send a request for a model it already holds through its own OpenAI client
-instead of this provider. Such a request still goes to the active target with the
-active key, but without the guarded transport, the target checks, or the
+instead of this provider. Such a request still goes to the active endpoint with
+the active key, but without the guarded transport, the endpoint checks, or the
 attribution header. Load the list with `/login actualyze` or interactive pi
 before relying on an override.
 
@@ -437,15 +491,20 @@ request, under any letter case, the provider sends your value unchanged.
 
 Authenticated traffic is deliberately constrained:
 
+- a key from the environment goes only to an endpoint the environment names, and
+  production is a default only for `/login`, whose prompt names the host;
 - targets are one validated ASCII DNS label;
-- all requests must use HTTPS;
-- the origin must exactly match the configured target;
-- paths must remain beneath `/openai/v1`;
+- a base URL is an absolute URL without credentials, query, or fragment;
+- all requests must use HTTPS, except plain HTTP to a `localhost`, `127.0.0.1`,
+  or `[::1]` base URL;
+- the origin must exactly match the configured endpoint;
+- paths must remain beneath the base URL's path (`/openai/v1` for a target);
 - redirects are rejected with `redirect: "error"`;
-- cross-target cached models are discarded, so the catalog never mixes targets;
+- cached models from another endpoint are discarded, so the catalog never mixes
+  endpoints;
 - inference refuses a request before sending credentials when the current catalog
-  attributes the model id to another target's base URL, when the model object's
-  base URL does not match the active target (direct provider use), or when the id
+  attributes the model id to another endpoint's base URL, when the model object's
+  base URL does not match the active endpoint (direct provider use), or when the id
   is absent from the current non-empty discovered catalog (covering stale sessions
   after upstream catalog changes and models.json-defined entries, which this
   provider does not support);
@@ -479,30 +538,34 @@ The provider is designed to fail without corrupting a valid catalog:
   model list.
 - **Offline startup:** A matching persisted catalog can remain available without a
   successful network refresh.
-- **Target isolation:** A cache from another target is removed rather than exposed
+- **Endpoint isolation:** A cache from another endpoint is removed rather than exposed
   under the current credential.
 
 ## pi Commands and CLI Behavior
 
-| Command              | Purpose                                            |
-| -------------------- | -------------------------------------------------- |
-| `/login actualyze`   | Enter an API key, validate it, and discover models |
-| `/model`             | Browse and select discovered Actualyze models      |
-| `/logout actualyze`  | Remove the stored Actualyze credential             |
-| `--actualyze-target` | CLI flag selecting a non-production target         |
-| `pi list`            | Show installed pi packages                         |
-| `pi remove …`        | Uninstall the package                              |
+| Command              | Purpose                                                       |
+| -------------------- | ------------------------------------------------------------- |
+| `/login actualyze`   | Enter an API key, validate it, and discover models            |
+| `/model`             | Browse and select discovered Actualyze models                 |
+| `/logout actualyze`  | Remove the stored Actualyze credential                        |
+| `--actualyze-target` | CLI flag selecting a target (`--actualyze-target=-` for none) |
+| `pi list`            | Show installed pi packages                                    |
+| `pi remove …`        | Uninstall the package                                         |
 
 ### Print Mode and Model Listing
 
 `pi -p` and `pi --list-models` use the saved model list and never fetch it from
 Actualyze. pi fetches the list on `/login actualyze`, after interactive pi starts,
-and when `/model` opens. A new environment that has only `ACTUALYZE_API_KEY`
-set and no saved list therefore shows no Actualyze models in these modes. Start
+and when `/model` opens. The one exception is a run that names an Actualyze model
+with `--model`, which fetches the list while pi loads the extension (see
+[Refresh and Cache Behavior](#refresh-and-cache-behavior)). Without `--model`, a
+new environment that sets the key and endpoint through environment variables and
+has no saved list therefore shows no Actualyze models in these modes. Start
 interactive pi once, or run `/login actualyze`, to save the list.
 
-With only `ACTUALYZE_API_KEY` set, `pi -p` without `--model` sometimes starts
-with no model selected and reports "No API key found for the selected model."
+When the key and endpoint come only from environment variables, `pi -p` without
+`--model` sometimes starts with no model selected and reports "No API key found
+for the selected model."
 This is a startup race in pi, and it happens more often when `models.json`
 exists. Pass `--model actualyze/<model id>`, or log in with `/login actualyze` so
 that pi stores the credential.
@@ -542,25 +605,44 @@ pi remove /absolute/path/to/pi-actualyze
 pi install /absolute/path/to/pi-actualyze
 ```
 
-### Login rejects the target
+### Login rejects the target or base URL
 
-Login never asks for a target, so this only happens when `--actualyze-target` or
-`ACTUALYZE_TARGET` holds an invalid value. Pass only the DNS label:
+Login never asks for an endpoint, so this only happens when `--actualyze-target`,
+`ACTUALYZE_TARGET`, or `ACTUALYZE_OPENAI_BASE_URL` holds an invalid value, when a
+target and the base URL name different endpoints, or when the target is `-` and
+no base URL is set. Pass only the DNS label:
 
 ```bash
 pi --actualyze-target staging
 ```
 
 Do not pass `staging.actualyze.ai`, `https://staging.actualyze.ai`, a port, path,
-or surrounding whitespace. Unset both to use production.
+or surrounding whitespace. For an environment outside `*.actualyze.ai`, set
+`ACTUALYZE_OPENAI_BASE_URL` instead. Unset all three to log in to production.
+
+### pi exits with `Unknown provider "actualyze"`
+
+pi looks up `--provider actualyze --model <id>` before it refreshes catalogs from
+the network, so the provider needs a cached catalog or a successful fetch while
+the extension loads. Check that:
+
+- the environment names an endpoint (`ACTUALYZE_TARGET=app` for production, or
+  `ACTUALYZE_OPENAI_BASE_URL`) as well as `ACTUALYZE_API_KEY`, or you have run
+  `/login actualyze`; a key alone names no endpoint;
+- a first run is not started with `--offline`; and
+- the endpoint accepts the key: `/login actualyze` reports the error.
+
+A saved login stores its catalog when you log in. If that cache is gone, start
+pi once without `--model` and open `/model`, which refreshes it.
 
 ### Login returns an authentication or catalog error
 
 Check that:
 
-- the API key belongs to the selected target (production unless you chose
+- the API key belongs to the selected endpoint (production unless you chose
   another one);
-- the target can reach `https://<target>.actualyze.ai/openai/v1/models`;
+- the endpoint's `/models` (for a target,
+  `https://<target>.actualyze.ai/openai/v1/models`) is reachable;
 - a proxy is not returning HTML or a redirect; and
 - the endpoint returns a complete OpenAI-style JSON model list.
 
@@ -578,6 +660,33 @@ Zero means Actualyze lists no cost for the model, so its price is unknown, not
 free. See [Pricing](#pricing). After an upgrade from pi-actualyze 2.0.0 or
 earlier, a saved model list shows zero costs until pi next refreshes it from
 Actualyze.
+
+## Upgrading to 3.0
+
+A saved login from `/login actualyze` keeps working as before. What changes:
+
+- **A key from the environment needs an endpoint.** With `ACTUALYZE_API_KEY` set
+  and no `--actualyze-target`, `ACTUALYZE_TARGET`, or
+  `ACTUALYZE_OPENAI_BASE_URL`, 2.x sent the key to production. 3.0 sends it
+  nowhere, and the provider is unavailable. The same holds for a key passed
+  with pi's `--api-key`. To keep using production, add `ACTUALYZE_TARGET=app`
+  or run `/login actualyze` once.
+- **`ACTUALYZE_OPENAI_BASE_URL`** names the endpoint for a run, so a launcher can
+  point pi at an Actualyze environment outside `*.actualyze.ai` (see
+  [Another Actualyze Environment by URL](#another-actualyze-environment-by-url)).
+  When a target is set as well, both must name the same endpoint.
+- **`ACTUALYZE_TARGET=-`** (or `--actualyze-target=-`, with the `=`) selects no
+  `*.actualyze.ai` target.
+- **A first run with `--provider actualyze --model <id>`** fetches the catalog
+  while pi loads the extension, so it works with nothing cached instead of
+  exiting with `Unknown provider "actualyze"`.
+- **Downgrading.** pi-actualyze 2.x does not read a saved login's
+  `ACTUALYZE_OPENAI_BASE_URL` and would send that login's key to production. Run
+  `/logout actualyze` before you install 2.x again.
+- **SDK hosts.** The controller from `createActualyzeProvider` has a new
+  `primeCatalog()` method. A provider env passed to `stream()` may name
+  `ACTUALYZE_OPENAI_BASE_URL` instead of `ACTUALYZE_TARGET`; an env whose two
+  values name different endpoints is refused before the request is sent.
 
 ## Development
 
@@ -644,6 +753,16 @@ use; the advisory model is expected to advertise both as false. The default live
 command fetches only the catalog and verifies raw-to-parsed ID parity; the paid
 streamed tool loop runs only with the explicit inference flag and model.
 
+To run the same suite against an environment outside `*.actualyze.ai`, such as a
+local Actualyze stack or a mock on this machine, name its base URL instead of a
+target:
+
+```bash
+ACTUALYZE_OPENAI_BASE_URL='http://127.0.0.1:8080/openai/v1' \
+ACTUALYZE_API_KEY='...' \
+npm run test:live
+```
+
 Never enable live tests for untrusted pull requests. Supply credentials only through
 protected local or CI secret environments.
 
@@ -653,8 +772,8 @@ protected local or CI secret environments.
 `ACTUALYZE_BASE_URL` and checks that the provider parses every entry, in order,
 and carries the advertised limits, image input, and reasoning flags into each
 model. It also fails if no entry advertises a context or output limit, which
-would mean the API renamed those fields. Without both variables the test is
-skipped:
+would mean the API renamed those fields. The endpoint must be `https`, or plain
+`http` on this machine. Without both variables the test is skipped:
 
 ```bash
 ACTUALYZE_BASE_URL='https://<target>.actualyze.ai/openai/v1' \

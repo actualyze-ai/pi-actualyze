@@ -15,6 +15,8 @@ import { ActualyzeClient, type ActualyzeClientOptions } from "./client.js";
 import {
 	ACTUALYZE_API_KEY_ENV,
 	ACTUALYZE_DEFAULT_TARGET,
+	ACTUALYZE_NO_TARGET,
+	ACTUALYZE_OPENAI_BASE_URL_ENV,
 	ACTUALYZE_PROVIDER_ID,
 	ACTUALYZE_PROVIDER_NAME,
 	ACTUALYZE_REQUEST_METADATA_HEADER,
@@ -23,20 +25,37 @@ import {
 import {
 	ActualyzeConfigurationError,
 	actualyzeBaseUrl,
-	actualyzeHost,
+	endpointLabel,
+	normalizeBaseUrl,
 	normalizeTarget,
 	validateApiKey,
 } from "./endpoint.js";
 import { createGuardedFetch } from "./transport.js";
 
-interface ResolvedConfiguration {
-	target: string;
-	apiKey: string;
+/**
+ * Where a key may be sent: the base URL, and the provider env that names it.
+ * pi stores the env with a login credential and hands the resolved env back
+ * to `stream()`, so it holds exactly one of `ACTUALYZE_TARGET` and
+ * `ACTUALYZE_OPENAI_BASE_URL`.
+ */
+interface Endpoint {
 	baseUrl: string;
+	env: Record<string, string>;
+}
+
+interface ResolvedConfiguration extends Endpoint {
+	apiKey: string;
 	source: string;
 }
 
-interface PendingLoginCatalog {
+/** The environment values that apply where no stored credential field does. */
+interface AmbientValues {
+	target: string | undefined;
+	baseUrl: string | undefined;
+	apiKey: string | undefined;
+}
+
+interface PendingCatalog {
 	configuration: ResolvedConfiguration;
 	models: readonly Model<"openai-completions">[];
 }
@@ -46,14 +65,31 @@ export interface ActualyzeProviderOptions extends ActualyzeClientOptions {
 	 * Explicit target selection, such as the `--actualyze-target` CLI flag.
 	 * Read lazily on every resolution because pi parses extension flags after
 	 * the extension factory runs. Takes precedence over `ACTUALYZE_TARGET`;
-	 * a stored credential's target still wins over both.
+	 * a stored credential's endpoint still wins over both.
 	 */
 	target?: () => string | undefined;
+}
+
+export interface PrimeCatalogOptions {
+	/** The model id the command line names. */
+	modelId?: string;
+	/** The models pi has cached for this provider. */
+	cached?: readonly AnyModel[];
+	signal?: AbortSignal;
 }
 
 export interface ActualyzeProviderController {
 	provider: Provider<"openai-completions">;
 	getModels(): readonly Model<"openai-completions">[];
+	/**
+	 * Fetch the catalog with the configuration the environment alone names
+	 * (no stored credential), install it, and stage it so the next refresh
+	 * that resolves the same key and endpoint persists it, as login does.
+	 * Resolves false without a request when the environment names no key or
+	 * no endpoint, or when `cached` is a catalog pi will restore for that
+	 * endpoint and it lists `modelId`.
+	 */
+	primeCatalog(options?: PrimeCatalogOptions): Promise<boolean>;
 }
 
 function credentialValue(credential: ApiKeyCredential | undefined, name: string): string | undefined {
@@ -61,38 +97,64 @@ function credentialValue(credential: ApiKeyCredential | undefined, name: string)
 	return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
+function targetEndpoint(target: string): Endpoint {
+	const label = normalizeTarget(target);
+	return { baseUrl: actualyzeBaseUrl(label), env: { [ACTUALYZE_TARGET_ENV]: label } };
+}
+
 /**
- * The target used when no stored credential pins one: the explicit selection
- * (CLI flag), then `ACTUALYZE_TARGET`, then production. Empty values count as
- * unset so `ACTUALYZE_TARGET=` falls through to production.
+ * The endpoint a target and a base URL name. A target label names
+ * `https://<label>.actualyze.ai/openai/v1`; `-` and empty values name
+ * nothing. When both name an endpoint they must be the same one: a launcher
+ * sets the base URL of the environment its key belongs to, and a target
+ * naming another endpoint would send that key elsewhere. Throws
+ * ActualyzeConfigurationError for an invalid value or a disagreement.
  */
-function ambientTarget(selected: string | undefined, envTarget: string | undefined): string {
-	return selected || envTarget || ACTUALYZE_DEFAULT_TARGET;
+function endpointFrom(target: string | undefined, baseUrl: string | undefined): Endpoint | undefined {
+	const labelled = target && target !== ACTUALYZE_NO_TARGET ? targetEndpoint(target) : undefined;
+	if (!baseUrl) return labelled;
+	const explicit = normalizeBaseUrl(baseUrl);
+	if (labelled && labelled.baseUrl !== explicit) {
+		throw new ActualyzeConfigurationError(
+			`The Actualyze target and ${ACTUALYZE_OPENAI_BASE_URL_ENV} name different endpoints`,
+		);
+	}
+	return labelled ?? { baseUrl: explicit, env: { [ACTUALYZE_OPENAI_BASE_URL_ENV]: explicit } };
 }
 
-function configurationSource(storedTarget: string | undefined, storedKey: string | undefined): string {
-	return storedTarget || storedKey ? "stored credential" : ACTUALYZE_API_KEY_ENV;
-}
-
-async function resolveConfiguration(
-	ctx: AuthContext,
+/**
+ * Field-by-field precedence: a stored key wins over `ACTUALYZE_API_KEY`, and a
+ * stored endpoint wins over the ambient one, which the selected target (the
+ * CLI flag) or `ACTUALYZE_TARGET` names together with
+ * `ACTUALYZE_OPENAI_BASE_URL`. Nothing defaults to production here: without a
+ * stored or ambient endpoint there is no configuration, so a key never goes
+ * to an endpoint that only a default chose. Corruption in a stored field
+ * throws; invalid or contradictory ambient values make authentication
+ * unavailable.
+ */
+function configurationFrom(
 	credential: ApiKeyCredential | undefined,
 	selectedTarget: string | undefined,
-): Promise<ResolvedConfiguration | undefined> {
-	const storedTarget = credentialValue(credential, ACTUALYZE_TARGET_ENV);
-	const rawTarget = storedTarget ?? ambientTarget(selectedTarget, await ctx.env(ACTUALYZE_TARGET_ENV));
+	ambient: AmbientValues,
+): ResolvedConfiguration | undefined {
 	const storedKey = credential?.key;
-	const rawKey = storedKey ?? (await ctx.env(ACTUALYZE_API_KEY_ENV));
+	const rawKey = storedKey ?? ambient.apiKey;
 	if (!rawKey) return undefined;
-	let target: string;
-	try {
-		target = normalizeTarget(rawTarget);
-	} catch (error) {
-		// Corruption in a stored field must surface; invalid ambient env is
-		// treated as unavailable authentication.
-		if (storedTarget) throw error;
-		return undefined;
+	const stored = endpointFrom(
+		credentialValue(credential, ACTUALYZE_TARGET_ENV),
+		credentialValue(credential, ACTUALYZE_OPENAI_BASE_URL_ENV),
+	);
+	let endpoint = stored;
+	if (!endpoint) {
+		try {
+			// Empty values count as unset, so `ACTUALYZE_TARGET=` falls through.
+			endpoint = endpointFrom(selectedTarget || ambient.target, ambient.baseUrl);
+		} catch (error) {
+			if (error instanceof ActualyzeConfigurationError) return undefined;
+			throw error;
+		}
 	}
+	if (!endpoint) return undefined;
 	let apiKey: string;
 	try {
 		apiKey = validateApiKey(rawKey);
@@ -101,10 +163,25 @@ async function resolveConfiguration(
 		return undefined;
 	}
 	return {
-		target,
+		...endpoint,
 		apiKey,
-		baseUrl: actualyzeBaseUrl(target),
-		source: configurationSource(storedTarget, storedKey),
+		source: stored || storedKey ? "stored credential" : ACTUALYZE_API_KEY_ENV,
+	};
+}
+
+async function contextAmbient(ctx: AuthContext): Promise<AmbientValues> {
+	return {
+		target: await ctx.env(ACTUALYZE_TARGET_ENV),
+		baseUrl: await ctx.env(ACTUALYZE_OPENAI_BASE_URL_ENV),
+		apiKey: await ctx.env(ACTUALYZE_API_KEY_ENV),
+	};
+}
+
+function processAmbient(): AmbientValues {
+	return {
+		target: process.env[ACTUALYZE_TARGET_ENV],
+		baseUrl: process.env[ACTUALYZE_OPENAI_BASE_URL_ENV],
+		apiKey: process.env[ACTUALYZE_API_KEY_ENV],
 	};
 }
 
@@ -121,29 +198,36 @@ function refreshConfiguration(
 	credential: ApiKeyCredential | undefined,
 	selectedTarget: string | undefined,
 ): ResolvedConfiguration | undefined {
-	// Field-by-field precedence, mirroring resolveConfiguration: each stored
-	// field wins over its ambient counterpart independently. refreshModels has
-	// no AuthContext, so ambient values come from process.env (login reads
-	// process.env directly for the same reason). Validation here is
-	// non-throwing: corrupt stored fields still surface via resolve() throwing
-	// in pi's phase-2 network refresh, so the lastResolvedConfiguration
-	// fallback in the caller only affects cache-only restore.
-	const storedTarget = credentialValue(credential, ACTUALYZE_TARGET_ENV);
-	const rawTarget = storedTarget ?? ambientTarget(selectedTarget, process.env[ACTUALYZE_TARGET_ENV]);
-	const storedKey = credential?.key;
-	const rawKey = storedKey ?? process.env[ACTUALYZE_API_KEY_ENV];
-	if (!rawKey) return undefined;
+	// refreshModels has no AuthContext, so ambient values come from
+	// process.env (login reads process.env directly for the same reason).
+	// Validation here is non-throwing: corrupt stored fields still surface via
+	// resolve() throwing in pi's phase-2 network refresh, so the
+	// lastResolvedConfiguration fallback in the caller only affects
+	// cache-only restore.
 	try {
-		const target = normalizeTarget(rawTarget);
-		return {
-			target,
-			apiKey: validateApiKey(rawKey),
-			baseUrl: actualyzeBaseUrl(target),
-			source: configurationSource(storedTarget, storedKey),
-		};
+		return configurationFrom(credential, selectedTarget, processAmbient());
 	} catch {
 		return undefined;
 	}
+}
+
+/**
+ * Login's endpoint: the one the selected target, `ACTUALYZE_TARGET`, and
+ * `ACTUALYZE_OPENAI_BASE_URL` name, else production. The key prompt names the
+ * host, so the member confirms production by entering a key for it. A `-`
+ * target without a base URL selects no endpoint, and login refuses it rather
+ * than choose production.
+ */
+function loginEndpoint(selectedTarget: string | undefined): Endpoint {
+	const target = selectedTarget || process.env[ACTUALYZE_TARGET_ENV];
+	const endpoint = endpointFrom(target, process.env[ACTUALYZE_OPENAI_BASE_URL_ENV]);
+	if (endpoint) return endpoint;
+	if (target === ACTUALYZE_NO_TARGET) {
+		throw new ActualyzeConfigurationError(
+			`The Actualyze target "-" selects no endpoint; set ${ACTUALYZE_OPENAI_BASE_URL_ENV} or a target label to log in`,
+		);
+	}
+	return targetEndpoint(ACTUALYZE_DEFAULT_TARGET);
 }
 
 /**
@@ -185,15 +269,15 @@ function withRequestMetadata(
 }
 
 function streamBaseUrl(env: Record<string, string> | undefined): string {
-	const target = env?.[ACTUALYZE_TARGET_ENV];
-	if (!target) throw new Error("Actualyze request is missing its resolved target configuration");
-	return actualyzeBaseUrl(target);
+	const endpoint = endpointFrom(env?.[ACTUALYZE_TARGET_ENV], env?.[ACTUALYZE_OPENAI_BASE_URL_ENV]);
+	if (!endpoint) throw new Error("Actualyze request is missing its resolved endpoint configuration");
+	return endpoint.baseUrl;
 }
 
 export function createActualyzeProvider(options: ActualyzeProviderOptions = {}): ActualyzeProviderController {
 	let models: readonly Model<"openai-completions">[] = [];
 	let lastResolvedConfiguration: ResolvedConfiguration | undefined;
-	let pendingLoginCatalog: PendingLoginCatalog | undefined;
+	let pendingCatalog: PendingCatalog | undefined;
 	const streams = openAICompletionsApi();
 	const underlyingFetch = options.fetch ?? globalThis.fetch;
 	const selectedTarget = (): string | undefined => options.target?.();
@@ -224,37 +308,29 @@ export function createActualyzeProvider(options: ActualyzeProviderOptions = {}):
 			apiKey: {
 				name: "Actualyze API key",
 				login: async (interaction): Promise<ApiKeyCredential> => {
-					// Login does not prompt for a target: it uses production unless
-					// --actualyze-target or ACTUALYZE_TARGET selects another one.
-					// Validate first so an invalid selection fails before the key
-					// prompt.
-					const target = normalizeTarget(ambientTarget(selectedTarget(), process.env[ACTUALYZE_TARGET_ENV]));
+					// Login does not prompt for an endpoint. Resolve it first so an
+					// invalid selection fails before the key prompt.
+					const endpoint = loginEndpoint(selectedTarget());
 					const enteredKey = await interaction.prompt({
 						type: "secret",
-						message: `Actualyze API key for ${actualyzeHost(target)}`,
+						message: `Actualyze API key for ${endpointLabel(endpoint.baseUrl)}`,
 					});
 					const apiKey = validateApiKey(enteredKey);
-					const baseUrl = actualyzeBaseUrl(target);
-					const catalog = await new ActualyzeClient(baseUrl, apiKey, options).list(interaction.signal);
-					const configuration = {
-						target,
-						apiKey,
-						baseUrl,
-						source: "stored credential",
-					};
+					const catalog = await new ActualyzeClient(endpoint.baseUrl, apiKey, options).list(interaction.signal);
+					const configuration = { ...endpoint, apiKey, source: "stored credential" };
 					installCatalog(catalog);
 					lastResolvedConfiguration = configuration;
-					pendingLoginCatalog = { configuration, models: catalog };
+					pendingCatalog = { configuration, models: catalog };
 					return {
 						type: "api_key",
 						key: apiKey,
-						env: { [ACTUALYZE_TARGET_ENV]: target },
+						env: endpoint.env,
 					};
 				},
 				check: async ({ ctx, credential }) => {
 					let configuration: ResolvedConfiguration | undefined;
 					try {
-						configuration = await resolveConfiguration(ctx, credential, selectedTarget());
+						configuration = configurationFrom(credential, selectedTarget(), await contextAmbient(ctx));
 					} catch (error) {
 						if (error instanceof ActualyzeConfigurationError) return undefined;
 						throw error;
@@ -264,7 +340,7 @@ export function createActualyzeProvider(options: ActualyzeProviderOptions = {}):
 					return { type: "api_key", source: configuration.source };
 				},
 				resolve: async ({ ctx, credential }): Promise<AuthResult | undefined> => {
-					const configuration = await resolveConfiguration(ctx, credential, selectedTarget());
+					const configuration = configurationFrom(credential, selectedTarget(), await contextAmbient(ctx));
 					if (!configuration) return undefined;
 					lastResolvedConfiguration = configuration;
 					return {
@@ -272,7 +348,7 @@ export function createActualyzeProvider(options: ActualyzeProviderOptions = {}):
 							apiKey: configuration.apiKey,
 							baseUrl: configuration.baseUrl,
 						},
-						env: { [ACTUALYZE_TARGET_ENV]: configuration.target },
+						env: configuration.env,
 						source: configuration.source,
 					};
 				},
@@ -285,27 +361,27 @@ export function createActualyzeProvider(options: ActualyzeProviderOptions = {}):
 			if (!configuration) return;
 
 			if (
-				pendingLoginCatalog &&
-				pendingLoginCatalog.configuration.baseUrl === configuration.baseUrl &&
-				pendingLoginCatalog.configuration.apiKey === configuration.apiKey
+				pendingCatalog &&
+				pendingCatalog.configuration.baseUrl === configuration.baseUrl &&
+				pendingCatalog.configuration.apiKey === configuration.apiKey
 			) {
-				const pending = pendingLoginCatalog;
+				const pending = pendingCatalog;
 				const published = await context.publish({
 					persist: { models: pending.models, checkedAt: Date.now() },
 					update: () => installCatalog(pending.models),
 				});
-				if (published) pendingLoginCatalog = undefined;
+				if (published) pendingCatalog = undefined;
 				return;
 			}
 
-			// Only the matching branch above consumes a pending login catalog.
-			// A refresh holding an older credential can still be in flight when
+			// Only the matching branch above consumes a pending catalog. A
+			// refresh holding an older credential can still be in flight when
 			// login completes, and pi does not supersede it until the post-login
 			// sync, so a successful mismatched publish may be that stale refresh.
 			// Keeping the pending catalog lets the post-login refresh republish
 			// it. If auth later returns to the pending configuration without a
-			// new login, the login-time catalog is republished once before the
-			// next network refresh replaces it.
+			// new login, the staged catalog is republished once before the next
+			// network refresh replaces it.
 
 			if (context.stored) {
 				const restored = context.stored.models.filter((model) => isRestorableModel(model, configuration.baseUrl));
@@ -368,5 +444,28 @@ export function createActualyzeProvider(options: ActualyzeProviderOptions = {}):
 		},
 	};
 
-	return { provider, getModels: () => models };
+	const primeCatalog = async ({ modelId, cached, signal }: PrimeCatalogOptions = {}): Promise<boolean> => {
+		// Called before pi resolves auth, with no access to its credential
+		// store, so only the environment can name the key and the endpoint.
+		const configuration = refreshConfiguration(undefined, selectedTarget());
+		if (!configuration) return false;
+		// pi's startup refresh restores a cached catalog only when every entry
+		// belongs to this endpoint (see refreshModels), and then it resolves
+		// the model from the cache without this fetch.
+		if (
+			modelId !== undefined &&
+			cached !== undefined &&
+			cached.length > 0 &&
+			cached.every((model) => isRestorableModel(model, configuration.baseUrl)) &&
+			cached.some((model) => model.id === modelId)
+		) {
+			return false;
+		}
+		const catalog = await new ActualyzeClient(configuration.baseUrl, configuration.apiKey, options).list(signal);
+		installCatalog(catalog);
+		pendingCatalog = { configuration, models: catalog };
+		return true;
+	};
+
+	return { provider, getModels: () => models, primeCatalog };
 }

@@ -8,4 +8,5 @@ if (process.env.ACTUALYZE_LIVE_TEST !== "1" && process.env.ACTUALYZE_CONTRACT_TE
 	delete process.env.ACTUALYZE_TARGET;
 	delete process.env.ACTUALYZE_API_KEY;
 	delete process.env.ACTUALYZE_BASE_URL;
+	delete process.env.ACTUALYZE_OPENAI_BASE_URL;
 }

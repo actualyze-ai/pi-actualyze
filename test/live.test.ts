@@ -1,13 +1,27 @@
 import { normalizeContext, type ToolResultMessage, Type } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 import { parseCatalog } from "../src/catalog.js";
-import { actualyzeBaseUrl, normalizeTarget, validateApiKey } from "../src/endpoint.js";
+import { actualyzeBaseUrl, normalizeBaseUrl, normalizeTarget, validateApiKey } from "../src/endpoint.js";
 import { createActualyzeProvider } from "../src/provider.js";
 import { createGuardedFetch, getJson } from "../src/transport.js";
 
 const target = process.env.ACTUALYZE_TARGET;
+const openaiBaseUrl = process.env.ACTUALYZE_OPENAI_BASE_URL;
 const apiKey = process.env.ACTUALYZE_API_KEY;
-const live = process.env.ACTUALYZE_LIVE_TEST === "1" && target !== undefined && apiKey !== undefined;
+const live =
+	process.env.ACTUALYZE_LIVE_TEST === "1" &&
+	(target !== undefined || openaiBaseUrl !== undefined) &&
+	apiKey !== undefined;
+
+/** The base URL under test and the env a resolved request carries for it: ACTUALYZE_OPENAI_BASE_URL, else the target. */
+function liveEndpoint(): { baseUrl: string; env: Record<string, string> } {
+	if (openaiBaseUrl) {
+		const baseUrl = normalizeBaseUrl(openaiBaseUrl);
+		return { baseUrl, env: { ACTUALYZE_OPENAI_BASE_URL: baseUrl } };
+	}
+	const label = normalizeTarget(target ?? "");
+	return { baseUrl: actualyzeBaseUrl(label), env: { ACTUALYZE_TARGET: label } };
+}
 const liveModel = process.env.ACTUALYZE_LIVE_MODEL;
 const liveInference = live && process.env.ACTUALYZE_LIVE_INFERENCE === "1" && liveModel !== undefined;
 const advisoryModel = process.env.ACTUALYZE_LIVE_ADVISORY_MODEL;
@@ -15,7 +29,7 @@ const liveAdvisory = live && process.env.ACTUALYZE_LIVE_INFERENCE === "1" && adv
 
 describe.skipIf(!live)("Actualyze live catalog", () => {
 	it("preserves exact raw catalog ID and count parity", async () => {
-		const baseUrl = actualyzeBaseUrl(normalizeTarget(target ?? ""));
+		const { baseUrl } = liveEndpoint();
 		const payload = await getJson(`${baseUrl}/models`, validateApiKey(apiKey ?? ""), {
 			fetch: createGuardedFetch(baseUrl),
 			signal: AbortSignal.timeout(12_000),
@@ -30,8 +44,7 @@ describe.skipIf(!live)("Actualyze live catalog", () => {
 
 describe.skipIf(!liveInference)("Actualyze live inference", () => {
 	it("completes a native streamed tool loop", async () => {
-		const normalizedTarget = normalizeTarget(target ?? "");
-		const baseUrl = actualyzeBaseUrl(normalizedTarget);
+		const { baseUrl, env } = liveEndpoint();
 		const secret = validateApiKey(apiKey ?? "");
 		const [model] = parseCatalog(
 			{
@@ -57,7 +70,7 @@ describe.skipIf(!liveInference)("Actualyze live inference", () => {
 		const user = { role: "user" as const, content: "Call echo with the exact value OK.", timestamp: Date.now() };
 		const options = {
 			apiKey: secret,
-			env: { ACTUALYZE_TARGET: normalizedTarget },
+			env,
 			reasoningEffort: "low" as const,
 			maxTokens: 512,
 			timeoutMs: 90_000,
@@ -90,8 +103,7 @@ describe.skipIf(!liveInference)("Actualyze live inference", () => {
 
 describe.skipIf(!liveAdvisory)("Actualyze live advisory flags", () => {
 	it("streams from a catalog entry advertising streaming and tool use as false", async () => {
-		const normalizedTarget = normalizeTarget(target ?? "");
-		const baseUrl = actualyzeBaseUrl(normalizedTarget);
+		const { baseUrl, env } = liveEndpoint();
 		const secret = validateApiKey(apiKey ?? "");
 		const payload = (await getJson(`${baseUrl}/models`, secret, {
 			fetch: createGuardedFetch(baseUrl),
@@ -107,7 +119,7 @@ describe.skipIf(!liveAdvisory)("Actualyze live advisory flags", () => {
 				normalizeContext({ messages: [{ role: "user", content: "Reply with OK only.", timestamp: Date.now() }] }),
 				{
 					apiKey: secret,
-					env: { ACTUALYZE_TARGET: normalizedTarget },
+					env,
 					maxTokens: 256,
 					timeoutMs: 90_000,
 					signal: AbortSignal.timeout(90_000),

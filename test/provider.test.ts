@@ -220,8 +220,6 @@ describe("native Actualyze provider auth", () => {
 describe("Actualyze target selection", () => {
 	describe("when resolving ambient auth", () => {
 		it.each([
-			{ flag: undefined, env: undefined, expected: "app" },
-			{ flag: "", env: "", expected: "app" },
 			{ flag: "", env: "team", expected: "team" },
 			{ flag: "flagged", env: "team", expected: "flagged" },
 		])("selects $expected for flag $flag and ACTUALYZE_TARGET $env", async ({ flag, env, expected }) => {
@@ -243,6 +241,128 @@ describe("Actualyze target selection", () => {
 				type: "api_key",
 				source: "ACTUALYZE_API_KEY",
 			});
+		});
+
+		it.each([
+			{ flag: undefined, env: undefined },
+			{ flag: "", env: "" },
+			{ flag: undefined, env: "-" },
+			{ flag: "-", env: "team" },
+		])("names no endpoint for flag $flag and ACTUALYZE_TARGET $env without a base URL", async ({ flag, env }) => {
+			const { provider } = createActualyzeProvider({ target: () => flag });
+			const ctx = authContext({
+				ACTUALYZE_TARGET: env,
+				ACTUALYZE_API_KEY: "ambient-key",
+			});
+			const signal = new AbortController().signal;
+			await expect(provider.auth.apiKey?.resolve({ ctx, signal })).resolves.toBeUndefined();
+			await expect(provider.auth.apiKey?.check?.({ ctx, signal })).resolves.toBeUndefined();
+		});
+
+		it.each([undefined, "-"])(
+			"selects ACTUALYZE_OPENAI_BASE_URL, normalized, when ACTUALYZE_TARGET is %j",
+			async (target) => {
+				const { provider } = createActualyzeProvider();
+				await expect(
+					provider.auth.apiKey?.resolve({
+						ctx: authContext({
+							ACTUALYZE_TARGET: target,
+							ACTUALYZE_OPENAI_BASE_URL: "https://Actualyze.Example.com/openai/v1/",
+							ACTUALYZE_API_KEY: "run-key",
+						}),
+						signal: new AbortController().signal,
+					}),
+				).resolves.toEqual({
+					auth: { apiKey: "run-key", baseUrl: "https://actualyze.example.com/openai/v1" },
+					env: { ACTUALYZE_OPENAI_BASE_URL: "https://actualyze.example.com/openai/v1" },
+					source: "ACTUALYZE_API_KEY",
+				});
+			},
+		);
+
+		it("accepts a target that names the same endpoint as ACTUALYZE_OPENAI_BASE_URL", async () => {
+			const { provider } = createActualyzeProvider();
+			await expect(
+				provider.auth.apiKey?.resolve({
+					ctx: authContext({
+						ACTUALYZE_TARGET: "app",
+						ACTUALYZE_OPENAI_BASE_URL: "https://app.actualyze.ai/openai/v1/",
+						ACTUALYZE_API_KEY: "run-key",
+					}),
+					signal: new AbortController().signal,
+				}),
+			).resolves.toMatchObject({
+				auth: { baseUrl: "https://app.actualyze.ai/openai/v1" },
+				env: { ACTUALYZE_TARGET: "app" },
+			});
+		});
+
+		it.each([
+			{ flag: undefined, env: "team", baseUrl: "https://actualyze.example.com/openai/v1" },
+			{ flag: "staging", env: undefined, baseUrl: "https://app.actualyze.ai/openai/v1" },
+			{ flag: undefined, env: "app", baseUrl: "http://actualyze.example.com/openai/v1" },
+		])(
+			"declines flag $flag and ACTUALYZE_TARGET $env with ACTUALYZE_OPENAI_BASE_URL $baseUrl",
+			async ({ flag, env, baseUrl }) => {
+				const { provider } = createActualyzeProvider({ target: () => flag });
+				const ctx = authContext({
+					ACTUALYZE_TARGET: env,
+					ACTUALYZE_OPENAI_BASE_URL: baseUrl,
+					ACTUALYZE_API_KEY: "run-key",
+				});
+				const signal = new AbortController().signal;
+				await expect(provider.auth.apiKey?.resolve({ ctx, signal })).resolves.toBeUndefined();
+				await expect(provider.auth.apiKey?.check?.({ ctx, signal })).resolves.toBeUndefined();
+			},
+		);
+
+		it("keeps a stored base URL over the ambient endpoint and key", async () => {
+			const { provider } = createActualyzeProvider({ target: () => "flagged" });
+			await expect(
+				provider.auth.apiKey?.resolve({
+					ctx: authContext({
+						ACTUALYZE_TARGET: "team",
+						ACTUALYZE_OPENAI_BASE_URL: "https://other.example/openai/v1",
+						ACTUALYZE_API_KEY: "ambient-key",
+					}),
+					credential: {
+						type: "api_key",
+						key: "stored-key",
+						env: { ACTUALYZE_OPENAI_BASE_URL: "https://actualyze.example.com/openai/v1" },
+					},
+					signal: new AbortController().signal,
+				}),
+			).resolves.toEqual({
+				auth: { apiKey: "stored-key", baseUrl: "https://actualyze.example.com/openai/v1" },
+				env: { ACTUALYZE_OPENAI_BASE_URL: "https://actualyze.example.com/openai/v1" },
+				source: "stored credential",
+			});
+		});
+
+		it.each<Record<string, string>>([
+			{ ACTUALYZE_OPENAI_BASE_URL: "http://actualyze.example.com/openai/v1" },
+			{ ACTUALYZE_TARGET: "app", ACTUALYZE_OPENAI_BASE_URL: "https://actualyze.example.com/openai/v1" },
+		])("surfaces a stored endpoint %j through resolve while check reports unconfigured", async (env) => {
+			const { provider } = createActualyzeProvider();
+			const corrupt: ApiKeyCredential = { type: "api_key", key: "stored-key", env };
+			const signal = new AbortController().signal;
+			await expect(
+				provider.auth.apiKey?.resolve({ ctx: authContext({}), credential: corrupt, signal }),
+			).rejects.toBeInstanceOf(ActualyzeConfigurationError);
+			await expect(
+				provider.auth.apiKey?.check?.({ ctx: authContext({}), credential: corrupt, signal }),
+			).resolves.toBeUndefined();
+		});
+
+		it("does not choose production for a stored key that names no endpoint", async () => {
+			const { provider } = createActualyzeProvider();
+			await expect(
+				provider.auth.apiKey?.resolve({
+					ctx: authContext({}),
+					credential: { type: "api_key", key: "inline-key" },
+					signal: new AbortController().signal,
+				}),
+			).resolves.toBeUndefined();
 		});
 
 		it("reports an invalid selected target as unavailable even when ACTUALYZE_TARGET is valid", async () => {
@@ -318,6 +438,44 @@ describe("Actualyze target selection", () => {
 			expect(interaction.prompt).not.toHaveBeenCalled();
 			expect(network).not.toHaveBeenCalled();
 		});
+
+		it("logs in to ACTUALYZE_OPENAI_BASE_URL and stores it with the key", async () => {
+			vi.stubEnv("ACTUALYZE_OPENAI_BASE_URL", "https://Actualyze.Example.com/openai/v1/");
+			const network = vi.fn<typeof fetch>(async () => jsonResponse(catalogPayload));
+			const controller = createActualyzeProvider({ fetch: network });
+			const interaction = keyInteraction("own-key");
+			await expect(controller.provider.auth.apiKey?.login?.(interaction)).resolves.toEqual({
+				type: "api_key",
+				key: "own-key",
+				env: { ACTUALYZE_OPENAI_BASE_URL: "https://actualyze.example.com/openai/v1" },
+			});
+			expect(interaction.prompt).toHaveBeenCalledWith({
+				type: "secret",
+				message: "Actualyze API key for actualyze.example.com",
+			});
+			expect(requestedHost(network.mock.calls[0])).toBe("actualyze.example.com");
+			expect(controller.getModels().map((model) => model.baseUrl)).toEqual([
+				"https://actualyze.example.com/openai/v1",
+				"https://actualyze.example.com/openai/v1",
+			]);
+		});
+
+		it.each([
+			{ target: "-", baseUrl: undefined, message: /selects no endpoint/u },
+			{ target: "team", baseUrl: "https://actualyze.example.com/openai/v1", message: /different endpoints/u },
+		])(
+			"rejects ACTUALYZE_TARGET $target with ACTUALYZE_OPENAI_BASE_URL $baseUrl before prompting",
+			async ({ target, baseUrl, message }) => {
+				vi.stubEnv("ACTUALYZE_TARGET", target);
+				if (baseUrl) vi.stubEnv("ACTUALYZE_OPENAI_BASE_URL", baseUrl);
+				const network = vi.fn<typeof fetch>();
+				const controller = createActualyzeProvider({ fetch: network });
+				const interaction = keyInteraction("secret");
+				await expect(controller.provider.auth.apiKey?.login?.(interaction)).rejects.toThrow(message);
+				expect(interaction.prompt).not.toHaveBeenCalled();
+				expect(network).not.toHaveBeenCalled();
+			},
+		);
 	});
 
 	describe("when refreshing models", () => {
@@ -326,23 +484,37 @@ describe("Actualyze target selection", () => {
 			return true;
 		};
 
-		it("restores the production cache for an ACTUALYZE_API_KEY-only environment", async () => {
+		it("sends nothing and leaves the stored catalog alone for an ACTUALYZE_API_KEY-only environment", async () => {
 			vi.stubEnv("ACTUALYZE_API_KEY", "ambient-key");
-			const controller = createActualyzeProvider({
-				fetch: async () => {
-					throw new Error("cache-only refresh must not use the network");
-				},
-			});
+			const network = vi.fn<typeof fetch>(async () => jsonResponse(catalogPayload));
+			const controller = createActualyzeProvider({ fetch: network });
 			const [cached] = parseCatalog({ data: [modelEntry("prod-cached")] }, "https://app.actualyze.ai/openai/v1");
+			const publish = vi.fn(publishAll);
 			await controller.provider.refreshModels?.(
 				refreshContext({
 					credential: undefined,
-					allowNetwork: false,
+					allowNetwork: true,
 					stored: { models: [cached] },
-					publish: publishAll,
+					publish,
 				}),
 			);
-			expect(controller.getModels().map((model) => model.id)).toEqual(["prod-cached"]);
+			expect(network).not.toHaveBeenCalled();
+			expect(publish).not.toHaveBeenCalled();
+			expect(controller.getModels()).toEqual([]);
+		});
+
+		it("fetches from ACTUALYZE_OPENAI_BASE_URL when no target is selected", async () => {
+			vi.stubEnv("ACTUALYZE_API_KEY", "run-key");
+			vi.stubEnv("ACTUALYZE_OPENAI_BASE_URL", "http://127.0.0.1:8080/openai/v1");
+			const network = vi.fn<typeof fetch>(async () => jsonResponse(catalogPayload));
+			const controller = createActualyzeProvider({ fetch: network });
+			await controller.provider.refreshModels?.(refreshContext({ credential: undefined, publish: publishAll }));
+			expect(String(network.mock.calls[0]?.[0])).toBe("http://127.0.0.1:8080/openai/v1/models");
+			expect(new Headers(network.mock.calls[0]?.[1]?.headers).get("authorization")).toBe("Bearer run-key");
+			expect(controller.getModels().map((model) => model.baseUrl)).toEqual([
+				"http://127.0.0.1:8080/openai/v1",
+				"http://127.0.0.1:8080/openai/v1",
+			]);
 		});
 
 		it("fetches from the selected target over ACTUALYZE_TARGET", async () => {
@@ -375,6 +547,55 @@ describe("Actualyze target selection", () => {
 			);
 			expect(requestedHost(network.mock.calls[0])).toBe("stored.actualyze.ai");
 		});
+	});
+});
+
+describe("priming the catalog from the environment", () => {
+	it("sends nothing when the environment names a key but no endpoint", async () => {
+		vi.stubEnv("ACTUALYZE_API_KEY", "run-key");
+		const network = vi.fn<typeof fetch>(async () => jsonResponse(catalogPayload));
+		const controller = createActualyzeProvider({ fetch: network });
+		await expect(controller.primeCatalog()).resolves.toBe(false);
+		expect(network).not.toHaveBeenCalled();
+		expect(controller.getModels()).toEqual([]);
+	});
+
+	describe("with pi's cached catalog", () => {
+		const loopback = "http://127.0.0.1:8080/openai/v1";
+		const [cachedA, cachedB] = parseCatalog({ data: [modelEntry("model-a"), modelEntry("model-b")] }, loopback);
+		const [foreignA] = parseCatalog({ data: [modelEntry("model-a")] }, "https://app.actualyze.ai/openai/v1");
+
+		it.each([
+			{ case: "lists the model for the endpoint", cached: [cachedA, cachedB], modelId: "model-a", fetched: false },
+			{ case: "lacks the model", cached: [cachedB], modelId: "model-a", fetched: true },
+			{ case: "mixes in another endpoint's entry", cached: [foreignA, cachedB], modelId: "model-b", fetched: true },
+			{ case: "is empty", cached: [], modelId: "model-a", fetched: true },
+		])("fetches $fetched when the cache $case", async ({ cached, modelId, fetched }) => {
+			vi.stubEnv("ACTUALYZE_API_KEY", "run-key");
+			vi.stubEnv("ACTUALYZE_OPENAI_BASE_URL", loopback);
+			const network = vi.fn<typeof fetch>(async () => jsonResponse(catalogPayload));
+			const controller = createActualyzeProvider({ fetch: network });
+			await expect(controller.primeCatalog({ modelId, cached })).resolves.toBe(fetched);
+			expect(network).toHaveBeenCalledTimes(fetched ? 1 : 0);
+		});
+	});
+
+	it("installs the catalog and persists it on the next cache-only refresh for the same key and endpoint", async () => {
+		vi.stubEnv("ACTUALYZE_API_KEY", "run-key");
+		vi.stubEnv("ACTUALYZE_OPENAI_BASE_URL", "http://127.0.0.1:8080/openai/v1");
+		const network = vi.fn<typeof fetch>(async () => jsonResponse(catalogPayload));
+		const controller = createActualyzeProvider({ fetch: network });
+		await expect(controller.primeCatalog()).resolves.toBe(true);
+		expect(String(network.mock.calls[0]?.[0])).toBe("http://127.0.0.1:8080/openai/v1/models");
+		expect(controller.getModels().map((model) => model.id)).toEqual(["model-a", "model-b"]);
+
+		const publish = vi.fn(async (publication: ModelsPublication) => {
+			publication.update?.();
+			return true;
+		});
+		await controller.provider.refreshModels?.(refreshContext({ credential: undefined, allowNetwork: false, publish }));
+		expect(publish.mock.calls[0]?.[0].persist?.models.map((model) => model.id)).toEqual(["model-a", "model-b"]);
+		expect(network).toHaveBeenCalledOnce();
 	});
 });
 

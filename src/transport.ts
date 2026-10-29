@@ -1,4 +1,5 @@
 import { DEFAULT_MAX_RESPONSE_BYTES, DEFAULT_REQUEST_BUDGET_MS } from "./constants.js";
+import { isLoopbackHostname } from "./endpoint.js";
 
 export type FetchFunction = typeof globalThis.fetch;
 
@@ -117,12 +118,16 @@ function safeTransportError(error: unknown, authorization?: string): ActualyzeTr
 
 export function createGuardedFetch(baseUrl: string, underlyingFetch: FetchFunction = globalThis.fetch): FetchFunction {
 	const base = safeRequestUrl(baseUrl);
-	if (base.protocol !== "https:") throw new ActualyzeTransportError("Actualyze base URL must use HTTPS");
+	if (base.protocol !== "https:" && !(base.protocol === "http:" && isLoopbackHostname(base.hostname))) {
+		throw new ActualyzeTransportError("Actualyze base URL must use HTTPS");
+	}
 	const prefix = base.pathname.replace(/\/+$/u, "");
 
 	return async (input, init) => {
 		const url = safeRequestUrl(input);
-		if (url.protocol !== "https:" || url.origin !== base.origin || !isAllowedPath(url.pathname, prefix)) {
+		// The origin includes the scheme, so an HTTP loopback base admits only
+		// plain HTTP to that same host and port.
+		if (url.origin !== base.origin || !isAllowedPath(url.pathname, prefix)) {
 			throw new ActualyzeTransportError("Refusing Actualyze request outside the configured endpoint");
 		}
 		try {

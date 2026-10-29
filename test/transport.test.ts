@@ -33,6 +33,25 @@ describe("guarded Actualyze transport", () => {
 		expect(underlying).toHaveBeenCalledOnce();
 	});
 
+	it("admits plain HTTP only to the exact loopback origin it was configured with", async () => {
+		const underlying = vi.fn<typeof fetch>(async () => jsonResponse({ ok: true }));
+		const loopback = "http://127.0.0.1:8080/openai/v1";
+		const guarded = createGuardedFetch(loopback, underlying);
+
+		await guarded(`${loopback}/models`);
+		expect(underlying).toHaveBeenCalledOnce();
+		for (const url of [
+			"https://127.0.0.1:8080/openai/v1/models",
+			"http://127.0.0.1:8081/openai/v1/models",
+			"http://localhost:8080/openai/v1/models",
+			"http://customer.actualyze.ai/openai/v1/models",
+		]) {
+			await expect(guarded(url)).rejects.toThrow(/outside the configured endpoint/u);
+		}
+		expect(underlying).toHaveBeenCalledOnce();
+		expect(() => createGuardedFetch("http://127.0.0.2:8080/openai/v1", underlying)).toThrow(/base URL must use HTTPS/u);
+	});
+
 	it.each([301, 302, 303, 307, 308])("rejects HTTP %i without following it", async (status) => {
 		const underlying = vi.fn<typeof fetch>(
 			async () =>
