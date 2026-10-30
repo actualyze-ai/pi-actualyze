@@ -60,6 +60,11 @@
 		"typescript": "7.0.2",
 		"vitest": "5.0.5"
 	},
+	"overrides": {
+		"@earendil-works/pi-coding-agent@1.4.0": {
+			"undici": "^8.12.3"
+		}
+	},
 	"pi": {
 		"extensions": [
 			"./src/index.ts"
