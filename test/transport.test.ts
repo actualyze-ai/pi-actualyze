@@ -1,8 +1,46 @@
-import { describe, expect, it, vi } from "vitest";
-import { createGuardedFetch, getJson } from "../src/transport.js";
+import type { LookupAddress } from "node:dns";
+import { createServer, type ServerResponse } from "node:http";
+import type { AddressInfo, LookupFunction } from "node:net";
+import { type Dispatcher, EnvHttpProxyAgent, getGlobalDispatcher, setGlobalDispatcher } from "undici";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createGuardedFetch, createLoopbackDispatcher, getJson, loopbackLookup } from "../src/transport.js";
 import { jsonResponse } from "./fixtures.js";
 
 const baseUrl = "https://customer.actualyze.ai/openai/v1";
+
+interface Recorder {
+	origin: string;
+	port: number;
+	/** `METHOD url authorization` for every request, and `CONNECT host:port` for every tunnel it refused. */
+	seen: string[];
+	close(): Promise<void>;
+}
+
+/** A loopback HTTP server that records what reaches it and refuses every CONNECT. */
+async function startRecorder(reply: (response: ServerResponse) => void): Promise<Recorder> {
+	const seen: string[] = [];
+	const server = createServer((request, response) => {
+		seen.push(`${request.method} ${request.url} ${request.headers.authorization ?? ""}`);
+		request.resume();
+		request.on("end", () => reply(response));
+	});
+	server.on("connect", (request, socket) => {
+		seen.push(`CONNECT ${request.url}`);
+		socket.destroy();
+	});
+	await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+	const { port } = server.address() as AddressInfo;
+	return {
+		origin: `http://127.0.0.1:${port}`,
+		port,
+		seen,
+		close: () =>
+			new Promise<void>((done) => {
+				server.closeAllConnections();
+				server.close(() => done());
+			}),
+	};
+}
 
 describe("guarded Actualyze transport", () => {
 	it("rejects malformed and non-HTTPS base URLs before dispatch", () => {
@@ -372,5 +410,121 @@ describe("catalog JSON requests", () => {
 		controller.abort();
 		await expect(request).rejects.toThrow(/aborted/u);
 		expect(bodyCancelled).toBe(true);
+	});
+});
+
+describe("plain HTTP to a loopback endpoint", () => {
+	const previousDispatcher = getGlobalDispatcher();
+	let endpoint: Recorder;
+	let proxy: Recorder;
+	let proxyAgent: EnvHttpProxyAgent | undefined;
+
+	beforeEach(async () => {
+		endpoint = await startRecorder((response) => {
+			response.writeHead(200, { "content-type": "application/json" });
+			response.end(JSON.stringify({ data: [] }));
+		});
+		proxy = await startRecorder((response) => {
+			response.writeHead(502).end();
+		});
+	});
+
+	afterEach(async () => {
+		setGlobalDispatcher(previousDispatcher);
+		await proxyAgent?.close();
+		proxyAgent = undefined;
+		await Promise.all([endpoint.close(), proxy.close()]);
+	});
+
+	/** Install the global dispatcher pi installs, with every proxy variable naming `proxy`. */
+	function proxyEverything(proxyTunnel: boolean): void {
+		for (const name of ["HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy"]) vi.stubEnv(name, proxy.origin);
+		for (const name of ["NO_PROXY", "no_proxy"]) vi.stubEnv(name, "");
+		proxyAgent = new EnvHttpProxyAgent({ proxyTunnel });
+		setGlobalDispatcher(proxyAgent);
+	}
+
+	it.each([true, false])(
+		"sends the key to the endpoint directly, never to HTTP_PROXY (proxyTunnel %s)",
+		async (proxyTunnel) => {
+			proxyEverything(proxyTunnel);
+			// Control: an ordinary fetch to the same origin goes to the proxy.
+			await fetch(`${endpoint.origin}/openai/v1/models`).catch(() => undefined);
+			expect(proxy.seen).not.toEqual([]);
+			expect(endpoint.seen).toEqual([]);
+			proxy.seen.length = 0;
+
+			const guarded = createGuardedFetch(`${endpoint.origin}/openai/v1`);
+			const response = await guarded(`${endpoint.origin}/openai/v1/models`, {
+				headers: { Authorization: "Bearer loopback-key" },
+			});
+			expect(response.status).toBe(200);
+			expect(endpoint.seen).toEqual(["GET /openai/v1/models Bearer loopback-key"]);
+			expect(proxy.seen).toEqual([]);
+		},
+	);
+
+	it("leaves HTTPS requests on the global dispatcher and its proxy", async () => {
+		proxyEverything(true);
+		await expect(createGuardedFetch(baseUrl)(`${baseUrl}/models`)).rejects.toThrow(
+			/failed before receiving a response/u,
+		);
+		expect(proxy.seen).toEqual(["CONNECT customer.actualyze.ai:443"]);
+	});
+
+	it("reaches a localhost endpoint through the system resolver", async () => {
+		const localhost = `http://localhost:${endpoint.port}/openai/v1`;
+		const response = await createGuardedFetch(localhost)(`${localhost}/models`);
+		expect(response.status).toBe(200);
+		expect(endpoint.seen).toEqual(["GET /openai/v1/models "]);
+	});
+
+	describe("when localhost resolves", () => {
+		const resolvingTo =
+			(...addresses: LookupAddress[]): LookupFunction =>
+			(_hostname, _options, callback) => {
+				callback(null, addresses);
+			};
+
+		function fetchThrough(dispatcher: Dispatcher, url: string): Promise<Response> {
+			const init: RequestInit & { dispatcher: Dispatcher } = { dispatcher };
+			return fetch(url, init);
+		}
+
+		it("refuses to connect when any address is off this machine", async () => {
+			const dispatcher = createLoopbackDispatcher(
+				resolvingTo({ address: "127.0.0.1", family: 4 }, { address: "192.0.2.10", family: 4 }),
+			);
+			const error = await fetchThrough(dispatcher, `http://localhost:${endpoint.port}/openai/v1/models`).catch(
+				(value: unknown) => value,
+			);
+			expect(error).toBeInstanceOf(TypeError);
+			expect(String((error as TypeError).cause)).toMatch(/localhost resolves to an address off this machine/u);
+			expect(endpoint.seen).toEqual([]);
+		});
+
+		it("connects when every address is a loopback address", async () => {
+			const dispatcher = createLoopbackDispatcher(resolvingTo({ address: "127.0.0.1", family: 4 }));
+			const response = await fetchThrough(dispatcher, `http://localhost:${endpoint.port}/openai/v1/models`);
+			expect(response.status).toBe(200);
+			expect(endpoint.seen).toEqual(["GET /openai/v1/models "]);
+		});
+
+		it("answers a lookup that asks for one address with the first loopback address", () => {
+			const lookup = loopbackLookup(resolvingTo({ address: "::1", family: 6 }, { address: "127.0.0.1", family: 4 }));
+			const callback = vi.fn();
+			lookup("localhost", { all: false }, callback);
+			expect(callback).toHaveBeenCalledWith(null, "::1", 6);
+		});
+
+		it("passes the resolver's own failure through", () => {
+			const failure = Object.assign(new Error("getaddrinfo ENOTFOUND localhost"), { code: "ENOTFOUND" });
+			const lookup = loopbackLookup((_hostname, _options, callback) => {
+				callback(failure, "");
+			});
+			const callback = vi.fn();
+			lookup("localhost", { all: true }, callback);
+			expect(callback).toHaveBeenCalledWith(failure, "");
+		});
 	});
 });

@@ -103,6 +103,15 @@ Key behaviors, each backed by tests:
   and paths under the base URL's path; rejects all redirects
   (301/302/303/307/308); and redacts the API key and authorization header
   from every error path, including provider error bodies and headers.
+- **Direct loopback HTTP** (`transport.ts`): pi installs undici's
+  `EnvHttpProxyAgent` as the global dispatcher, which would send plain HTTP,
+  key included, to `HTTP_PROXY` unless `NO_PROXY` lists the host. Plain
+  HTTP requests therefore carry their own undici `Agent` as the fetch
+  `dispatcher`; it reads no proxy variables, and its `lookup` fails unless
+  every address a name resolves to is loopback. HTTPS requests stay on the
+  global dispatcher, proxy included. This is the package's one runtime
+  dependency, `undici`: Node exposes no public `Agent`, and the extension
+  cannot import pi's copy.
 - **Fail-closed catalog** (`catalog.ts`): one malformed, duplicate, or
   unsafe entry rejects the whole generation. The previous generation stays
   intact. There is no partial publication.

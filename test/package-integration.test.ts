@@ -286,6 +286,43 @@ describe("pi package integration", () => {
 			}
 		}, 60_000);
 
+		// pi's global dispatcher sends plain HTTP to HTTP_PROXY unless NO_PROXY
+		// lists the host, so the proxy would receive the key in clear text if
+		// the extension's loopback requests went through it.
+		it("sends a loopback endpoint's key directly while HTTP_PROXY is set", async () => {
+			const endpoint = await startEndpoint();
+			const proxy = await startEndpoint();
+			const agentDir = mkdtempSync(resolve(tmpdir(), "pi-actualyze-integration-"));
+			try {
+				const result = await runPiAsync(
+					["--no-session", "--provider", "actualyze", "--model", "mock-model", "-p", "hi"],
+					agentDir,
+					{
+						HTTP_PROXY: proxy.origin,
+						http_proxy: proxy.origin,
+						HTTPS_PROXY: "",
+						https_proxy: "",
+						NO_PROXY: "",
+						no_proxy: "",
+						PI_SKIP_VERSION_CHECK: "1",
+						ACTUALYZE_API_KEY: "run-key",
+						ACTUALYZE_OPENAI_BASE_URL: `${endpoint.origin}/openai/v1`,
+					},
+				);
+				expect(result.status, result.stderr).toBe(0);
+				expect(result.stdout).toContain("FIRST-RUN-OK");
+				expect(endpoint.requests).toEqual([
+					"GET /openai/v1/models Bearer run-key",
+					"POST /openai/v1/chat/completions Bearer run-key",
+				]);
+				expect(proxy.requests).toEqual([]);
+				expect(proxy.tunnels).toEqual([]);
+			} finally {
+				rmSync(agentDir, { recursive: true, force: true });
+				await Promise.all([endpoint.close(), proxy.close()]);
+			}
+		}, 60_000);
+
 		it("answers a --model run from pi's cache without fetching the catalog at load", async () => {
 			const endpoint = await startEndpoint();
 			const baseUrl = `${endpoint.origin}/openai/v1`;

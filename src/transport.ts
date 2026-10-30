@@ -1,3 +1,6 @@
+import { lookup as dnsLookup, type LookupAddress } from "node:dns";
+import { BlockList, type LookupFunction } from "node:net";
+import { Agent, type Dispatcher, Dispatcher1Wrapper } from "undici";
 import { DEFAULT_MAX_RESPONSE_BYTES, DEFAULT_REQUEST_BUDGET_MS } from "./constants.js";
 import { isLoopbackHostname } from "./endpoint.js";
 
@@ -116,12 +119,67 @@ function safeTransportError(error: unknown, authorization?: string): ActualyzeTr
 	return new ActualyzeTransportError("Actualyze request failed before receiving a response");
 }
 
+const LOOPBACK_ADDRESSES = new BlockList();
+LOOPBACK_ADDRESSES.addSubnet("127.0.0.0", 8, "ipv4");
+LOOPBACK_ADDRESSES.addAddress("::1", "ipv6");
+
+function isLoopbackAddress({ address, family }: LookupAddress): boolean {
+	return LOOPBACK_ADDRESSES.check(address, family === 6 ? "ipv6" : "ipv4");
+}
+
+/**
+ * A `lookup` for plain HTTP connections: it resolves the name with `resolve`
+ * and fails unless every address it returns is a loopback address, so a
+ * hosts-file entry cannot point `localhost` at another machine. Addresses
+ * given as IP literals never reach a lookup.
+ */
+export function loopbackLookup(resolve: LookupFunction = dnsLookup): LookupFunction {
+	return (hostname, options, callback) => {
+		resolve(hostname, { ...options, all: true }, (error, addresses) => {
+			if (error) {
+				callback(error, "");
+				return;
+			}
+			const resolved = typeof addresses === "string" ? [] : addresses;
+			const [first] = resolved;
+			if (first === undefined || !resolved.every(isLoopbackAddress)) {
+				callback(
+					new Error(`${hostname} resolves to an address off this machine; plain HTTP may go only to loopback`),
+					"",
+				);
+				return;
+			}
+			if (options.all) callback(null, resolved);
+			else callback(null, first.address, first.family);
+		});
+	};
+}
+
+/**
+ * A dispatcher that connects straight to loopback addresses. pi installs
+ * undici's EnvHttpProxyAgent as the global dispatcher, which sends a plain
+ * HTTP request, bearer key included, to HTTP_PROXY unless NO_PROXY lists the
+ * host; this Agent reads no proxy variables. Dispatcher1Wrapper accepts both
+ * undici handler contracts, so Node's built-in fetch can use it too.
+ */
+export function createLoopbackDispatcher(resolve?: LookupFunction): Dispatcher {
+	return new Dispatcher1Wrapper(new Agent({ connect: { lookup: loopbackLookup(resolve) } }));
+}
+
+let loopbackDispatcher: Dispatcher | undefined;
+
 export function createGuardedFetch(baseUrl: string, underlyingFetch: FetchFunction = globalThis.fetch): FetchFunction {
 	const base = safeRequestUrl(baseUrl);
 	if (base.protocol !== "https:" && !(base.protocol === "http:" && isLoopbackHostname(base.hostname))) {
 		throw new ActualyzeTransportError("Actualyze base URL must use HTTPS");
 	}
 	const prefix = base.pathname.replace(/\/+$/u, "");
+	// HTTPS requests keep the caller's dispatcher, pi's proxy included.
+	let dispatcher: Dispatcher | undefined;
+	if (base.protocol === "http:") {
+		loopbackDispatcher ??= createLoopbackDispatcher();
+		dispatcher = loopbackDispatcher;
+	}
 
 	return async (input, init) => {
 		const url = safeRequestUrl(input);
@@ -134,6 +192,7 @@ export function createGuardedFetch(baseUrl: string, underlyingFetch: FetchFuncti
 			const response = await underlyingFetch(input, {
 				...init,
 				redirect: "error",
+				...(dispatcher ? { dispatcher } : {}),
 			});
 			if (response.status >= 300 && response.status < 400) {
 				cancelBody(response);

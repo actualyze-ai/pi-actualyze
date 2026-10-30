@@ -38,8 +38,9 @@ the discovered models available immediately. Open pi's model selector:
 
 Select any model under the `actualyze` provider.
 
-Upgrading from 2.x? A key set only through `ACTUALYZE_API_KEY` now needs a
-target as well; see [Upgrading to 3.0](#upgrading-to-30).
+Upgrading from 2.x? A key set only through `ACTUALYZE_API_KEY` now needs an
+endpoint as well (a target or base URL) or a saved login; see
+[Upgrading to 3.0](#upgrading-to-30).
 
 ## The Problem
 
@@ -253,6 +254,11 @@ or fragment. Plain `http` is accepted only for `localhost`, `127.0.0.1`, and
 the provider unavailable instead of being ignored, because the key set beside it
 belongs to that endpoint. `/login actualyze` uses the variable too when it is
 set, and the saved credential keeps the base URL.
+
+Plain `http` requests connect directly and never through a proxy, whatever
+`HTTP_PROXY` or pi's `httpProxy` setting says. A request to `localhost` fails
+when the name resolves to any address that is not loopback, for example through
+a hosts-file entry.
 
 ### Environment Configuration
 
@@ -496,7 +502,9 @@ Authenticated traffic is deliberately constrained:
 - targets are one validated ASCII DNS label;
 - a base URL is an absolute URL without credentials, query, or fragment;
 - all requests must use HTTPS, except plain HTTP to a `localhost`, `127.0.0.1`,
-  or `[::1]` base URL;
+  or `[::1]` base URL, which goes directly to this machine and never through a
+  proxy, and is refused when `localhost` resolves to any address that is not
+  loopback;
 - the origin must exactly match the configured endpoint;
 - paths must remain beneath the base URL's path (`/openai/v1` for a target);
 - redirects are rejected with `redirect: "error"`;

@@ -44,9 +44,9 @@ describe("Actualyze endpoint configuration", () => {
 		it.each([
 			["a bare host", "actualyze.example.com/openai/v1", /absolute https URL/u],
 			["surrounding whitespace", " https://actualyze.example.com/openai/v1", /absolute https URL/u],
-			["plain HTTP off this machine", "http://actualyze.example.com/openai/v1", /http only for localhost/u],
-			["plain HTTP to another loopback address", "http://127.0.0.2:8080/openai/v1", /http only for localhost/u],
-			["another scheme", "ftp://actualyze.example.com/openai/v1", /http only for localhost/u],
+			["plain HTTP off this machine", "http://actualyze.example.com/openai/v1", /http only for localhost,/u],
+			["plain HTTP to another loopback address", "http://127.0.0.2:8080/openai/v1", /http only for localhost,/u],
+			["another scheme", "ftp://actualyze.example.com/openai/v1", /http only for localhost,/u],
 			["credentials", "https://user:pass@actualyze.example.com/openai/v1", /credentials/u],
 			["a query", "https://actualyze.example.com/openai/v1?team=a", /query or fragment/u],
 			["a fragment", "https://actualyze.example.com/openai/v1#models", /query or fragment/u],

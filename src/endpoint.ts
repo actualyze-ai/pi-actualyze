@@ -50,7 +50,9 @@ export function normalizeBaseUrl(value: string): string {
 	}
 	const url = new URL(value);
 	if (url.protocol !== "https:" && !(url.protocol === "http:" && isLoopbackHostname(url.hostname))) {
-		throw new ActualyzeConfigurationError("Actualyze base URL must use https (http only for localhost)");
+		throw new ActualyzeConfigurationError(
+			"Actualyze base URL must use https (http only for localhost, 127.0.0.1, or [::1])",
+		);
 	}
 	if (url.username !== "" || url.password !== "") {
 		throw new ActualyzeConfigurationError("Actualyze base URL must not contain credentials");

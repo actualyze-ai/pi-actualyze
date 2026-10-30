@@ -46,6 +46,9 @@
 	"engines": {
 		"node": ">=22.19.0"
 	},
+	"dependencies": {
+		"undici": "^8.12.3"
+	},
 	"peerDependencies": {
 		"@earendil-works/pi-ai": ">=1.0.0",
 		"@earendil-works/pi-coding-agent": ">=1.0.0"
