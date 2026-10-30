@@ -79,6 +79,43 @@ describe("native guarded OpenAI streaming", () => {
 		expect(network).toHaveBeenCalledOnce();
 	});
 
+	it("sends inference to the ACTUALYZE_OPENAI_BASE_URL the resolved env names", async () => {
+		const loopback = "http://127.0.0.1:8080/openai/v1";
+		const network = vi.fn<typeof fetch>(async (input, init) => {
+			const request = input instanceof Request ? input : new Request(input, init);
+			expect(request.url).toBe(`${loopback}/chat/completions`);
+			expect(request.headers.get("authorization")).toBe("Bearer run-key");
+			return sseResponse();
+		});
+		const controller = createActualyzeProvider({ fetch: network });
+		const [model] = parseCatalog({ data: [modelEntry("own-model")] }, loopback);
+		const result = await controller.provider
+			.streamSimple(model, normalizeContext({ messages: [{ role: "user", content: "Say OK", timestamp: 1 }] }), {
+				apiKey: "run-key",
+				env: { ACTUALYZE_OPENAI_BASE_URL: loopback },
+			})
+			.result();
+		expect(result.content).toEqual([{ type: "text", text: "OK" }]);
+		expect(network).toHaveBeenCalledOnce();
+	});
+
+	it.each<{ env: Record<string, string>; message: RegExp }>([
+		{ env: {}, message: /missing its resolved endpoint/u },
+		{ env: { ACTUALYZE_TARGET: "-" }, message: /missing its resolved endpoint/u },
+		{
+			env: { ACTUALYZE_TARGET: "customer", ACTUALYZE_OPENAI_BASE_URL: "https://actualyze.example.com/openai/v1" },
+			message: /different endpoints/u,
+		},
+	])("refuses a request whose env is $env before sending the key", ({ env, message }) => {
+		const network = vi.fn<typeof fetch>();
+		const controller = createActualyzeProvider({ fetch: network });
+		const [model] = parseCatalog({ data: [modelEntry("any")] }, baseUrl);
+		expect(() =>
+			controller.provider.streamSimple(model, normalizeContext({ messages: [] }), { apiKey: "secret", env }),
+		).toThrow(message);
+		expect(network).not.toHaveBeenCalled();
+	});
+
 	it("redacts credentials echoed by an inference error response", async () => {
 		const secret = "echoed-stream-secret";
 		const network: typeof fetch = async () =>
