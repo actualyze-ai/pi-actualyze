@@ -38,6 +38,7 @@ pi --no-extensions -e .
 | `pre-commit` hook            | Biome lint/format on staged files (lint-staged)                                                        |
 | `pre-push` hook              | `npm run check`                                                                                        |
 | CI (`ci.yml`)                | `npm ci`, `npm run check`, and `npm audit signatures` on Node 22 and 24, plus actionlint and zizmor    |
+| CI (`ci.yml`) audit job      | The release's full-tree `npm audit --audit-level=moderate`, so an advisory fails CI before a release   |
 | CI (`codeql.yml`)            | CodeQL for JavaScript/TypeScript and the workflows, on every change and weekly                         |
 | CI (`dependency-review.yml`) | Blocks pull requests that add vulnerable, denied, or disallowed-license dependencies                   |
 | CI (`vuln-scan.yml`)         | Daily full-tree `npm audit`, `npm audit signatures`, and a provenance check of every published version |
@@ -48,7 +49,9 @@ pi --no-extensions -e .
 | CI (`finalize-release.yml`)  | Run by hand after the release: checks the npm version and the draft, then publishes the draft          |
 | Never automatically          | Live tests (`npm run test:live`), which spend real credentials and money                               |
 
-Every workflow is a thin caller of a reusable workflow in
+Apart from the audit job in `ci.yml`, which runs `npm audit` itself because the
+reusable CI workflow has no audit step, every workflow is a thin caller of a
+reusable workflow in
 [actualyze-ai/oss-workflows](https://github.com/actualyze-ai/oss-workflows), pinned
 by commit SHA. Read that repository's README before changing a caller.
 
