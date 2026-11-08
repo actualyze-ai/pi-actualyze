@@ -7,6 +7,7 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import packageManifest from "../package.json";
 import { parseCatalog } from "../src/catalog.js";
+import { DEFAULT_REQUEST_BUDGET_MS } from "../src/constants.js";
 import { modelEntry } from "./fixtures.js";
 
 const projectRoot = resolve(import.meta.dirname, "..");
@@ -16,9 +17,17 @@ function piArgs(args: string[]): string[] {
 	return [piCli, "--no-extensions", "-e", resolve(projectRoot, "src/index.ts"), ...args];
 }
 
+/**
+ * Variables that can give one of pi's built-in providers credentials. A start
+ * that names no model takes the first provider with credentials, so none of
+ * the developer's may reach the CLI.
+ */
+const AMBIENT_CREDENTIAL = /KEY|TOKEN|SECRET|CREDENTIAL|PASSWORD|^AWS_|^AZURE_|^GOOGLE_|^GCLOUD_/iu;
+
 function piEnvironment(agentDir: string, env: Record<string, string> = {}): NodeJS.ProcessEnv {
+	const inherited = Object.entries(process.env).filter(([name]) => !AMBIENT_CREDENTIAL.test(name));
 	return {
-		...process.env,
+		...Object.fromEntries(inherited),
 		PI_CODING_AGENT_DIR: agentDir,
 		ACTUALYZE_TARGET: "",
 		ACTUALYZE_API_KEY: "",
@@ -150,6 +159,49 @@ async function startEndpoint(): Promise<LoopbackEndpoint> {
 				server.close(() => done());
 			}),
 	};
+}
+
+interface SilentEndpoint {
+	origin: string;
+	/** `METHOD path authorization` for every request it received. */
+	requests: string[];
+	/** How long, in milliseconds, each connection stayed open. */
+	holds: number[];
+	close(): Promise<void>;
+}
+
+/** A loopback endpoint that accepts requests and never answers them. */
+async function startSilentEndpoint(): Promise<SilentEndpoint> {
+	const requests: string[] = [];
+	const holds: number[] = [];
+	const server = createServer((request) => {
+		requests.push(`${request.method} ${request.url} ${request.headers.authorization ?? ""}`);
+		request.resume();
+	});
+	server.on("connection", (socket) => {
+		const opened = Date.now();
+		socket.on("close", () => holds.push(Date.now() - opened));
+	});
+	await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+	const { port } = server.address() as AddressInfo;
+	return {
+		origin: `http://127.0.0.1:${port}`,
+		requests,
+		holds,
+		close: () =>
+			new Promise<void>((done) => {
+				server.closeAllConnections();
+				server.close(() => done());
+			}),
+	};
+}
+
+/** Writes pi's auth.json in `agentDir` with an Actualyze API key stored for `baseUrl`. */
+function storeActualyzeKey(agentDir: string, baseUrl: string): void {
+	writeFileSync(
+		resolve(agentDir, "auth.json"),
+		JSON.stringify({ actualyze: { type: "api_key", key: "stored-key", env: { ACTUALYZE_OPENAI_BASE_URL: baseUrl } } }),
+	);
 }
 
 /** Resolves when `condition` holds or `timeoutMs` passes, whichever is first. */
@@ -387,5 +439,114 @@ describe("pi package integration", () => {
 				await endpoint.close();
 			}
 		}, 90_000);
+
+		// pi chooses the model of a start that names none from the models it
+		// holds after its cache-only startup refresh, and print mode never
+		// refreshes from the network, so only the extension's load-time fetch
+		// can give such a start an Actualyze model.
+		describe("on a start that names no model, with an Actualyze key pi stores", () => {
+			const plainStart = ["--no-session", "-p", "hi"];
+
+			it("answers with the stored key and saves the catalog when nothing is cached", async () => {
+				const endpoint = await startEndpoint();
+				const baseUrl = `${endpoint.origin}/openai/v1`;
+				const agentDir = mkdtempSync(resolve(tmpdir(), "pi-actualyze-integration-"));
+				try {
+					storeActualyzeKey(agentDir, baseUrl);
+					const result = await runPiAsync(plainStart, agentDir, direct);
+					expect(result.status, result.stderr).toBe(0);
+					expect(result.stdout).toContain("FIRST-RUN-OK");
+					expect(endpoint.requests).toEqual([
+						"GET /openai/v1/models Bearer stored-key",
+						"POST /openai/v1/chat/completions Bearer stored-key",
+					]);
+					const saved = JSON.parse(readFileSync(resolve(agentDir, "models-store.json"), "utf8")) as {
+						actualyze?: { models: Array<{ id: string; baseUrl: string }> };
+					};
+					expect(saved.actualyze?.models).toMatchObject([{ id: "mock-model", baseUrl }]);
+				} finally {
+					rmSync(agentDir, { recursive: true, force: true });
+					await endpoint.close();
+				}
+			}, 60_000);
+
+			it("answers from pi's cache without fetching the catalog", async () => {
+				const endpoint = await startEndpoint();
+				const baseUrl = `${endpoint.origin}/openai/v1`;
+				const agentDir = mkdtempSync(resolve(tmpdir(), "pi-actualyze-integration-"));
+				try {
+					storeActualyzeKey(agentDir, baseUrl);
+					const cached = parseCatalog({ data: [modelEntry("mock-model")] }, baseUrl);
+					writeFileSync(resolve(agentDir, "models-store.json"), JSON.stringify({ actualyze: { models: cached } }));
+					const result = await runPiAsync(plainStart, agentDir, direct);
+					expect(result.status, result.stderr).toBe(0);
+					expect(result.stdout).toContain("FIRST-RUN-OK");
+					expect(endpoint.requests).toEqual(["POST /openai/v1/chat/completions Bearer stored-key"]);
+				} finally {
+					rmSync(agentDir, { recursive: true, force: true });
+					await endpoint.close();
+				}
+			}, 60_000);
+
+			it("sends the stored key only to its own endpoint while the environment names another", async () => {
+				const stored = await startEndpoint();
+				const ambient = await startEndpoint();
+				const agentDir = mkdtempSync(resolve(tmpdir(), "pi-actualyze-integration-"));
+				try {
+					storeActualyzeKey(agentDir, `${stored.origin}/openai/v1`);
+					const result = await runPiAsync(plainStart, agentDir, {
+						...direct,
+						ACTUALYZE_API_KEY: "env-key",
+						ACTUALYZE_OPENAI_BASE_URL: `${ambient.origin}/openai/v1`,
+					});
+					expect(result.status, result.stderr).toBe(0);
+					expect(stored.requests).toEqual([
+						"GET /openai/v1/models Bearer stored-key",
+						"POST /openai/v1/chat/completions Bearer stored-key",
+					]);
+					expect(ambient.requests).toEqual([]);
+				} finally {
+					rmSync(agentDir, { recursive: true, force: true });
+					await Promise.all([stored.close(), ambient.close()]);
+				}
+			}, 60_000);
+
+			// Another provider, configured in models.json, is what pi starts on
+			// when the Actualyze catalog is unavailable. Without the startup
+			// bound, the silent endpoint would hold the load for the full
+			// request budget.
+			it("starts on another provider's model soon after the stored endpoint fails to answer", async () => {
+				const silent = await startSilentEndpoint();
+				const other = await startEndpoint();
+				const agentDir = mkdtempSync(resolve(tmpdir(), "pi-actualyze-integration-"));
+				try {
+					storeActualyzeKey(agentDir, `${silent.origin}/openai/v1`);
+					writeFileSync(
+						resolve(agentDir, "models.json"),
+						JSON.stringify({
+							providers: {
+								other: {
+									baseUrl: `${other.origin}/openai/v1`,
+									api: "openai-completions",
+									apiKey: "other-key",
+									models: [{ id: "other-model" }],
+								},
+							},
+						}),
+					);
+					const result = await runPiAsync(plainStart, agentDir, direct);
+					expect(result.status, result.stderr).toBe(0);
+					expect(result.stdout).toContain("FIRST-RUN-OK");
+					expect(other.requests).toEqual(["POST /openai/v1/chat/completions Bearer other-key"]);
+					expect(silent.requests).toEqual(["GET /openai/v1/models Bearer stored-key"]);
+					await until(() => silent.holds.length > 0, 5_000);
+					expect(silent.holds).toHaveLength(1);
+					expect(silent.holds[0]).toBeLessThan(DEFAULT_REQUEST_BUDGET_MS - 2_000);
+				} finally {
+					rmSync(agentDir, { recursive: true, force: true });
+					await Promise.all([silent.close(), other.close()]);
+				}
+			}, 60_000);
+		});
 	});
 });

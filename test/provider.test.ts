@@ -570,6 +570,19 @@ describe("priming the catalog from the environment", () => {
 			{ case: "lacks the model", cached: [cachedB], modelId: "model-a", fetched: true },
 			{ case: "mixes in another endpoint's entry", cached: [foreignA, cachedB], modelId: "model-b", fetched: true },
 			{ case: "is empty", cached: [], modelId: "model-a", fetched: true },
+			{
+				case: "holds the endpoint's catalog and no model is named",
+				cached: [cachedB],
+				modelId: undefined,
+				fetched: false,
+			},
+			{
+				case: "mixes in another endpoint's entry and no model is named",
+				cached: [foreignA, cachedB],
+				modelId: undefined,
+				fetched: true,
+			},
+			{ case: "is empty and no model is named", cached: [], modelId: undefined, fetched: true },
 		])("fetches $fetched when the cache $case", async ({ cached, modelId, fetched }) => {
 			vi.stubEnv("ACTUALYZE_API_KEY", "run-key");
 			vi.stubEnv("ACTUALYZE_OPENAI_BASE_URL", loopback);
@@ -596,6 +609,189 @@ describe("priming the catalog from the environment", () => {
 		await controller.provider.refreshModels?.(refreshContext({ credential: undefined, allowNetwork: false, publish }));
 		expect(publish.mock.calls[0]?.[0].persist?.models.map((model) => model.id)).toEqual(["model-a", "model-b"]);
 		expect(network).toHaveBeenCalledOnce();
+	});
+});
+
+describe("priming the catalog from pi's stored credential", () => {
+	const loopback = "http://127.0.0.1:8080/openai/v1";
+
+	function sent(network: ReturnType<typeof vi.fn<typeof fetch>>): string[] {
+		return network.mock.calls.map(
+			([input, init]) => `${String(input)} ${new Headers(init?.headers).get("authorization") ?? ""}`,
+		);
+	}
+
+	const ambientBaseUrl = "https://flagged.actualyze.ai/openai/v1";
+
+	/**
+	 * A provider whose environment and selected target together name a usable
+	 * key and endpoint of their own. They never fill in a field the credential
+	 * lacks; a named model's run may only use them as a whole instead of it.
+	 */
+	function ambientConfiguration(): ReturnType<typeof createActualyzeProvider> & {
+		network: ReturnType<typeof vi.fn<typeof fetch>>;
+	} {
+		vi.stubEnv("ACTUALYZE_API_KEY", "env-key");
+		vi.stubEnv("ACTUALYZE_OPENAI_BASE_URL", ambientBaseUrl);
+		const network = vi.fn<typeof fetch>(async () => jsonResponse(catalogPayload));
+		return { ...createActualyzeProvider({ fetch: network, target: () => "flagged" }), network };
+	}
+
+	const complete: Array<{ form: string; env: Record<string, string>; baseUrl: string }> = [
+		{
+			form: "a target label",
+			env: { ACTUALYZE_TARGET: "stored" },
+			baseUrl: "https://stored.actualyze.ai/openai/v1",
+		},
+		{
+			form: "a base URL with the - target",
+			env: { ACTUALYZE_TARGET: "-", ACTUALYZE_OPENAI_BASE_URL: loopback },
+			baseUrl: loopback,
+		},
+		{ form: "a base URL", env: { ACTUALYZE_OPENAI_BASE_URL: loopback }, baseUrl: loopback },
+	];
+
+	it.each<{ form: string; env: Record<string, string>; baseUrl: string; modelId: string | undefined }>(
+		complete.flatMap((row) => [
+			{ ...row, modelId: undefined },
+			{ ...row, modelId: "model-a" },
+		]),
+	)(
+		"fetches with the credential's key from the endpoint $form names, with modelId $modelId",
+		async ({ env, baseUrl, modelId }) => {
+			const { primeCatalog, getModels, network } = ambientConfiguration();
+			await expect(primeCatalog({ credential: { type: "api_key", key: "stored-key", env }, modelId })).resolves.toBe(
+				true,
+			);
+			expect(sent(network)).toEqual([`${baseUrl}/models Bearer stored-key`]);
+			expect(getModels().map((model) => model.baseUrl)).toEqual([baseUrl, baseUrl]);
+		},
+	);
+
+	/** Credentials that do not name both a usable key and a usable endpoint of their own. */
+	const incomplete: Array<{ case: string; credential: ApiKeyCredential }> = [
+		{ case: "names no endpoint", credential: { type: "api_key", key: "stored-key" } },
+		{
+			case: "names only the - target",
+			credential: { type: "api_key", key: "stored-key", env: { ACTUALYZE_TARGET: "-" } },
+		},
+		{
+			case: "names an invalid target",
+			credential: { type: "api_key", key: "stored-key", env: { ACTUALYZE_TARGET: "not a label" } },
+		},
+		{
+			case: "names plain HTTP off loopback",
+			credential: {
+				type: "api_key",
+				key: "stored-key",
+				env: { ACTUALYZE_OPENAI_BASE_URL: "http://example.com/openai/v1" },
+			},
+		},
+		{
+			case: "names two different endpoints",
+			credential: {
+				type: "api_key",
+				key: "stored-key",
+				env: { ACTUALYZE_TARGET: "stored", ACTUALYZE_OPENAI_BASE_URL: loopback },
+			},
+		},
+		{ case: "has an empty key", credential: { type: "api_key", key: "", env: { ACTUALYZE_TARGET: "stored" } } },
+		{
+			case: "has a key that is not one visible-ASCII token",
+			credential: { type: "api_key", key: "stored key", env: { ACTUALYZE_TARGET: "stored" } },
+		},
+	];
+
+	it.each(incomplete)(
+		"sends nothing without a named model when the credential $case, whatever the environment and the selected target name",
+		async ({ credential: stored }) => {
+			const { primeCatalog, getModels, network } = ambientConfiguration();
+			await expect(primeCatalog({ credential: stored })).resolves.toBe(false);
+			expect(network).not.toHaveBeenCalled();
+			expect(getModels()).toEqual([]);
+		},
+	);
+
+	it.each(incomplete)(
+		"fetches with the environment's key from the environment's endpoint for a named model when the credential $case",
+		async ({ credential: stored }) => {
+			const { primeCatalog, getModels, network } = ambientConfiguration();
+			await expect(primeCatalog({ credential: stored, modelId: "model-a" })).resolves.toBe(true);
+			expect(sent(network)).toEqual([`${ambientBaseUrl}/models Bearer env-key`]);
+			expect(getModels().map((model) => model.baseUrl)).toEqual([ambientBaseUrl, ambientBaseUrl]);
+		},
+	);
+
+	// The credential holds a usable key, so these show that it never fills in
+	// the key an environment-named endpoint lacks.
+	it.each([
+		{ case: "an endpoint but no key", env: { ACTUALYZE_OPENAI_BASE_URL: ambientBaseUrl }, target: undefined },
+		{ case: "a selected target but no key", env: {}, target: "flagged" },
+		{ case: "a key but no endpoint", env: { ACTUALYZE_API_KEY: "env-key" }, target: undefined },
+	])(
+		"sends nothing for a named model when the credential names no endpoint and the environment names $case",
+		async ({ env, target }) => {
+			for (const [name, value] of Object.entries(env)) vi.stubEnv(name, value);
+			const network = vi.fn<typeof fetch>(async () => jsonResponse(catalogPayload));
+			const controller = createActualyzeProvider({ fetch: network, target: () => target });
+			await expect(
+				controller.primeCatalog({ credential: { type: "api_key", key: "stored-key" }, modelId: "model-a" }),
+			).resolves.toBe(false);
+			expect(network).not.toHaveBeenCalled();
+			expect(controller.getModels()).toEqual([]);
+		},
+	);
+
+	describe("with pi's cached catalog", () => {
+		const stored: ApiKeyCredential = {
+			type: "api_key",
+			key: "stored-key",
+			env: { ACTUALYZE_OPENAI_BASE_URL: loopback },
+		};
+		const [cachedA, cachedB] = parseCatalog({ data: [modelEntry("model-a"), modelEntry("model-b")] }, loopback);
+		// The environment names this endpoint, so with a credential that names
+		// its own, only the credential's endpoint decides whether the cache is
+		// restorable.
+		const appBaseUrl = "https://app.actualyze.ai/openai/v1";
+		const [ambientA] = parseCatalog({ data: [modelEntry("model-a")] }, appBaseUrl);
+
+		it.each([
+			{
+				case: "holds the credential endpoint's catalog",
+				cached: [cachedA, cachedB],
+				modelId: undefined,
+				fetched: false,
+			},
+			{ case: "holds only the environment endpoint's catalog", cached: [ambientA], modelId: undefined, fetched: true },
+			{ case: "mixes in another endpoint's entry", cached: [ambientA, cachedB], modelId: undefined, fetched: true },
+			{ case: "is empty", cached: [], modelId: undefined, fetched: true },
+			{ case: "lists the named model", cached: [cachedA, cachedB], modelId: "model-a", fetched: false },
+			{ case: "lacks the named model", cached: [cachedB], modelId: "model-a", fetched: true },
+		])("fetches $fetched when the cache $case", async ({ cached, modelId, fetched }) => {
+			vi.stubEnv("ACTUALYZE_API_KEY", "env-key");
+			vi.stubEnv("ACTUALYZE_TARGET", "app");
+			const network = vi.fn<typeof fetch>(async () => jsonResponse(catalogPayload));
+			const controller = createActualyzeProvider({ fetch: network });
+			await expect(controller.primeCatalog({ credential: stored, modelId, cached })).resolves.toBe(fetched);
+			expect(sent(network)).toEqual(fetched ? [`${loopback}/models Bearer stored-key`] : []);
+		});
+
+		it.each([
+			{ case: "lists the named model for the environment's endpoint", cached: [ambientA], fetched: false },
+			{ case: "lists the named model only for another endpoint", cached: [cachedA], fetched: true },
+		])(
+			"fetches $fetched for a named model when the credential names no endpoint and the cache $case",
+			async ({ cached, fetched }) => {
+				vi.stubEnv("ACTUALYZE_API_KEY", "env-key");
+				vi.stubEnv("ACTUALYZE_TARGET", "app");
+				const network = vi.fn<typeof fetch>(async () => jsonResponse(catalogPayload));
+				const controller = createActualyzeProvider({ fetch: network });
+				await expect(
+					controller.primeCatalog({ credential: { type: "api_key", key: "stored-key" }, modelId: "model-a", cached }),
+				).resolves.toBe(fetched);
+				expect(sent(network)).toEqual(fetched ? [`${appBaseUrl}/models Bearer env-key`] : []);
+			},
+		);
 	});
 });
 

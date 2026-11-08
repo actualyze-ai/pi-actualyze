@@ -1,8 +1,13 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { AnyModel } from "@earendil-works/pi-ai";
-import { type ExtensionAPI, getAgentDir, parseArgs } from "@earendil-works/pi-coding-agent";
-import { ACTUALYZE_NO_TARGET, ACTUALYZE_PROVIDER_ID, ACTUALYZE_TARGET_FLAG } from "./constants.js";
+import type { AnyModel, ApiKeyCredential } from "@earendil-works/pi-ai";
+import { type ExtensionAPI, getAgentDir, parseArgs, readStoredCredential } from "@earendil-works/pi-coding-agent";
+import {
+	ACTUALYZE_NO_TARGET,
+	ACTUALYZE_PROVIDER_ID,
+	ACTUALYZE_TARGET_FLAG,
+	STARTUP_CATALOG_BUDGET_MS,
+} from "./constants.js";
 import { createActualyzeProvider } from "./provider.js";
 
 export { ACTUALYZE_PROVIDER_ID } from "./constants.js";
@@ -63,6 +68,26 @@ function cachedModels(): readonly AnyModel[] | undefined {
 	}
 }
 
+/**
+ * The Actualyze API key that pi's CLI has stored in auth.json in its agent
+ * dir, read with pi's own reader, which leaves the key as written. When pi
+ * reads it, a key that starts with `!` runs as a shell command and `$NAME`
+ * expands from the environment. This extension does neither, so only a key
+ * that pi uses as written counts; anything else counts as no credential.
+ */
+function storedCredential(): ApiKeyCredential | undefined {
+	const stored: unknown = readStoredCredential(ACTUALYZE_PROVIDER_ID);
+	if (typeof stored !== "object" || stored === null) return undefined;
+	const { type, key, env } = stored as Record<string, unknown>;
+	if (type !== "api_key" || typeof key !== "string" || key.startsWith("!") || key.includes("$")) {
+		return undefined;
+	}
+	if (env === undefined) return { type, key };
+	if (typeof env !== "object" || env === null || Array.isArray(env)) return undefined;
+	const values = Object.entries(env).filter((entry): entry is [string, string] => typeof entry[1] === "string");
+	return { type, key, env: Object.fromEntries(values) };
+}
+
 export default async function actualyzeExtension(pi: ExtensionAPI): Promise<void> {
 	pi.registerFlag(ACTUALYZE_TARGET_FLAG, {
 		// pi reads a separate `-` value as another option, so the help shows the `=` form.
@@ -94,22 +119,36 @@ export default async function actualyzeExtension(pi: ExtensionAPI): Promise<void
 			return argv().target;
 		},
 	});
-	// pi resolves --provider and --model against the models it holds after its
-	// cache-only startup refresh, before any network refresh. With nothing
-	// cached, this provider has no models then and pi exits with an unknown
-	// provider. The factory is the last extension code pi awaits before that
-	// lookup, so a run that names this provider's model fetches the catalog
-	// here, unless pi's cache already lists that model for the endpoint. A
-	// pattern pi matches fuzzily or with a thinking suffix is not an exact id,
-	// so it still fetches. ModelRuntime treats any PI_OFFLINE value as offline.
+	// pi chooses the session's model from the models it holds after its
+	// cache-only startup refresh, before any network refresh, and does not
+	// choose again once the network refresh lands. With nothing cached, this
+	// provider has no models then: a run that names this provider's model
+	// exits with an unknown provider, and a plain start on a stored key opens
+	// with another provider's model or none. The factory is the last extension
+	// code pi awaits before that choice, so a run that names this provider's
+	// model, or one where pi stores an Actualyze key, fetches the catalog here,
+	// unless pi's cache already holds the endpoint's catalog, listing the
+	// named model if there is one. A pattern pi matches fuzzily or with a
+	// thinking suffix is not an exact id, so it still fetches. ModelRuntime
+	// treats any PI_OFFLINE value as offline.
 	const model = argv().model;
-	if (model !== undefined && process.env.PI_OFFLINE === undefined) {
+	const credential = storedCredential();
+	if ((model !== undefined || credential !== undefined) && process.env.PI_OFFLINE === undefined) {
 		try {
-			await controller.primeCatalog({ modelId: model, cached: cachedModels() });
+			await controller.primeCatalog({
+				modelId: model,
+				cached: cachedModels(),
+				credential,
+				// Without a named model a failed fetch leaves pi where it would
+				// have started anyway, so an endpoint that does not answer holds
+				// up the start only briefly.
+				signal: model === undefined ? AbortSignal.timeout(STARTUP_CATALOG_BUDGET_MS) : undefined,
+			});
 		} catch {
 			// A failed fetch must not stop the extension from loading. The
 			// catalog stays empty until pi's startup refresh restores a cached
-			// one; without a cache, pi reports the provider as unknown.
+			// one; without a cache, pi reports a named model's provider as
+			// unknown and otherwise chooses among its other providers.
 		}
 	}
 	pi.registerProvider(controller.provider);

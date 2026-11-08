@@ -19,5 +19,12 @@ export const ACTUALYZE_REQUEST_METADATA_HEADER = "X-Actualyze-Request-Metadata";
 export const DEFAULT_CONTEXT_WINDOW = 128_000;
 export const DEFAULT_MAX_TOKENS = 16_384;
 export const DEFAULT_REQUEST_BUDGET_MS = 10_000;
+/**
+ * How long pi's start waits for the catalog the extension fetches on a stored
+ * key when the command line names no Actualyze model. pi's own refresh fetches
+ * it later, so an endpoint that does not answer delays such a start by at most
+ * this.
+ */
+export const STARTUP_CATALOG_BUDGET_MS = 3_000;
 export const DEFAULT_MAX_RESPONSE_BYTES = 5 * 1024 * 1024;
 export const MAX_MODEL_ID_LENGTH = 512;

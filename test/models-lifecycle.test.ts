@@ -213,6 +213,33 @@ describe("pi Models lifecycle integration", () => {
 		expect(inferenceCalls).toEqual([]);
 	});
 
+	// pi's CLI loads the extension, which primes the catalog with the stored
+	// credential, and registers the provider, which runs pi's cache-only
+	// startup refresh with that same credential.
+	it("lists a catalog primed with the stored credential and persists it on the cache-only startup refresh", async () => {
+		const stored = {
+			type: "api_key",
+			key: "stored-key",
+			env: { ACTUALYZE_TARGET: "customer" },
+		} as const;
+		const credentials = new InMemoryCredentialStore();
+		await credentials.modify("actualyze", async () => stored);
+		const modelsStore = new InMemoryModelsStore();
+		const network = vi.fn<typeof fetch>(async () => jsonResponse({ data: [modelEntry("primed")] }));
+		const controller = createActualyzeProvider({ fetch: network });
+		await expect(controller.primeCatalog({ credential: stored })).resolves.toBe(true);
+
+		const models = await ModelRuntime.create({ credentials, modelsStore, modelsPath: null, refreshOnCreate: false });
+		models.registerNativeProvider(controller.provider);
+		const result = await models.refresh({ allowNetwork: false, providers: ["actualyze"] });
+		expect(result.errors.size).toBe(0);
+		expect((await models.getAvailable("actualyze")).map((model) => model.id)).toEqual(["primed"]);
+		expect((await modelsStore.read("actualyze"))?.models).toMatchObject([
+			{ id: "primed", baseUrl: "https://customer.actualyze.ai/openai/v1" },
+		]);
+		expect(network).toHaveBeenCalledOnce();
+	});
+
 	it("retains the last valid generation when refresh fails after same-target key rotation", async () => {
 		const credentials = new InMemoryCredentialStore();
 		const modelsStore = new InMemoryModelsStore();

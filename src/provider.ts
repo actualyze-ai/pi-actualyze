@@ -75,6 +75,11 @@ export interface PrimeCatalogOptions {
 	modelId?: string;
 	/** The models pi has cached for this provider. */
 	cached?: readonly AnyModel[];
+	/**
+	 * pi's stored credential for this provider, with its key as pi resolves
+	 * it. Its key goes only to the endpoint it names itself.
+	 */
+	credential?: ApiKeyCredential;
 	signal?: AbortSignal;
 }
 
@@ -82,12 +87,14 @@ export interface ActualyzeProviderController {
 	provider: Provider<"openai-completions">;
 	getModels(): readonly Model<"openai-completions">[];
 	/**
-	 * Fetch the catalog with the configuration the environment alone names
-	 * (no stored credential), install it, and stage it so the next refresh
-	 * that resolves the same key and endpoint persists it, as login does.
-	 * Resolves false without a request when the environment names no key or
-	 * no endpoint, or when `cached` is a catalog pi will restore for that
-	 * endpoint and it lists `modelId`.
+	 * Fetch the catalog before pi's startup refresh, install it, and stage it
+	 * so the next refresh that resolves the same key and endpoint persists it,
+	 * as login does. The key and the endpoint come from `credential` when it
+	 * names both. Otherwise they come from the environment alone, which with
+	 * a `credential` happens only when `modelId` is given. Resolves false
+	 * without a request when that source names no key or no endpoint, or when
+	 * `cached` is a non-empty catalog pi will restore for that endpoint and,
+	 * if `modelId` is given, it lists that model.
 	 */
 	primeCatalog(options?: PrimeCatalogOptions): Promise<boolean>;
 }
@@ -192,6 +199,19 @@ function isRestorableModel(model: AnyModel, baseUrl: string): model is Model<"op
 		model.api === "openai-completions" &&
 		model.baseUrl === baseUrl
 	);
+}
+
+/**
+ * The configuration a stored credential names by itself: its own key and its
+ * own endpoint, with no ambient value filling a missing field. Undefined when
+ * it lacks either or holds an invalid one.
+ */
+function storedConfiguration(credential: ApiKeyCredential): ResolvedConfiguration | undefined {
+	try {
+		return configurationFrom(credential, undefined, { target: undefined, baseUrl: undefined, apiKey: undefined });
+	} catch {
+		return undefined;
+	}
 }
 
 function refreshConfiguration(
@@ -444,20 +464,28 @@ export function createActualyzeProvider(options: ActualyzeProviderOptions = {}):
 		},
 	};
 
-	const primeCatalog = async ({ modelId, cached, signal }: PrimeCatalogOptions = {}): Promise<boolean> => {
-		// Called before pi resolves auth, with no access to its credential
-		// store, so only the environment can name the key and the endpoint.
-		const configuration = refreshConfiguration(undefined, selectedTarget());
+	const primeCatalog = async ({ modelId, cached, credential, signal }: PrimeCatalogOptions = {}): Promise<boolean> => {
+		// Called before pi resolves auth. A stored credential's fields win
+		// over the environment's in every later refresh, so with both a key
+		// and an endpoint of its own it names the configuration pi's startup
+		// refresh resolves. Its key must not reach an endpoint that only the
+		// environment or the flag chose, so without one of them a run that
+		// names a model fetches with the environment's own key and endpoint,
+		// as it would with no stored credential, and any other run fetches
+		// nothing.
+		const stored = credential ? storedConfiguration(credential) : undefined;
+		const useEnvironment = credential === undefined || modelId !== undefined;
+		const configuration = stored ?? (useEnvironment ? refreshConfiguration(undefined, selectedTarget()) : undefined);
 		if (!configuration) return false;
 		// pi's startup refresh restores a cached catalog only when every entry
 		// belongs to this endpoint (see refreshModels), and then it resolves
-		// the model from the cache without this fetch.
+		// the model from the cache without this fetch. An empty cached catalog
+		// gives pi no model to choose, so it counts as none.
 		if (
-			modelId !== undefined &&
 			cached !== undefined &&
 			cached.length > 0 &&
 			cached.every((model) => isRestorableModel(model, configuration.baseUrl)) &&
-			cached.some((model) => model.id === modelId)
+			(modelId === undefined || cached.some((model) => model.id === modelId))
 		) {
 			return false;
 		}
