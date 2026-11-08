@@ -23,8 +23,8 @@ jobs:
     with:
       node-versions: '["22", "24"]'
 
-  # The release workflow runs this audit before it publishes. Running it
-  # here too fails CI on a new advisory instead of blocking a release.
+  # The release workflow runs this audit before it publishes. Running it on
+  # every change fails CI on a known advisory before a release tag hits it.
   audit:
     name: dependency audit
     runs-on: ubuntu-latest

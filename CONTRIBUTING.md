@@ -49,11 +49,11 @@ pi --no-extensions -e .
 | CI (`finalize-release.yml`)  | Run by hand after the release: checks the npm version and the draft, then publishes the draft          |
 | Never automatically          | Live tests (`npm run test:live`), which spend real credentials and money                               |
 
-Every workflow is a thin caller of a reusable workflow in
+Apart from the audit job in `ci.yml`, which runs `npm audit` itself because the
+reusable CI workflow has no audit step, every workflow is a thin caller of a
+reusable workflow in
 [actualyze-ai/oss-workflows](https://github.com/actualyze-ai/oss-workflows), pinned
-by commit SHA. The audit job in `ci.yml` is the one job this repository defines
-itself, because the reusable CI workflow has no audit step. Read that
-repository's README before changing a caller.
+by commit SHA. Read that repository's README before changing a caller.
 
 ## Architecture
 
