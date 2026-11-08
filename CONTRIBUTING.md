@@ -65,7 +65,7 @@ Six small modules under `src/`:
 | `catalog.ts`   | Fail-closed `/models` parsing and model conversion                               |
 | `client.ts`    | Thin composition: guarded fetch + `getJson` + `parseCatalog`                     |
 | `provider.ts`  | Endpoint resolution, auth hooks, refresh lifecycle, catalog state, stream guards |
-| `index.ts`     | Extension entry: `--actualyze-target`, `--model` catalog fetch, registration     |
+| `index.ts`     | Extension entry: `--actualyze-target`, catalog fetch at load, registration       |
 
 Data flow for a catalog refresh:
 
@@ -87,7 +87,8 @@ Key behaviors, each backed by tests:
   with `ACTUALYZE_OPENAI_BASE_URL`. When both a target and the base URL are
   set they must name the same endpoint, and `-` names no target. With no
   endpoint, a disagreement, or an invalid value, there is no configuration
-  and nothing is sent.
+  and nothing is sent. The catalog fetch while pi loads takes a stored
+  credential's key only together with the endpoint that credential names.
 - **Production only for login** (`provider.ts`): login prompts only for the
   API key, names the host in the prompt, and falls back to `app` when
   nothing selects an endpoint. A `-` target without a base URL fails login
@@ -176,19 +177,41 @@ real pipeline. The catalog-attribution check (look up the ID in the
 in-memory catalog) is the guard that actually works; the direct comparison
 is kept for direct provider use only.
 
-**pi resolves `--model` before any network refresh.** `resolveCliModel`
-looks the provider up among the models pi holds after its cache-only
-startup refresh, so with nothing cached `--provider actualyze --model <id>`
-fails with an unknown provider. The extension factory is the last extension
-code pi awaits before that lookup, so when pi's argv names an Actualyze
-model, `index.ts` awaits `primeCatalog()`: a fetch with the configuration
-the environment alone names (the factory cannot read pi's credential store),
-staged like a login catalog. It is skipped when `PI_OFFLINE` is set, and a
-failed fetch leaves the catalog empty without failing the extension load.
-It is also skipped when pi's cache would restore a catalog for that endpoint
-listing the exact model ID. pi exports no reader for its models store, so
-`index.ts` reads `models-store.json` in `getAgentDir()` itself; a file it
-cannot read or parse counts as no cache, which costs only the fetch.
+**pi chooses the model before any network refresh.** `resolveCliModel`
+looks `--provider actualyze --model <id>` up among the models pi holds after
+its cache-only startup refresh. A start without `--model` picks its model
+from the same snapshot. Nothing chooses again when the network refresh lands.
+With nothing cached, a `--model` run therefore fails with an unknown
+provider. A plain start on a stored key opens on another provider's model or
+none. The extension factory is the last extension code pi awaits before
+that choice. So when pi's argv names an Actualyze model, or pi's `auth.json`
+holds an Actualyze API key, `index.ts` awaits `primeCatalog()`, a fetch
+staged like a login catalog.
+
+With a stored credential that names a key and an endpoint, `primeCatalog()`
+takes both from it alone, so the key never reaches an endpoint that only the
+flag or the environment names. Every later refresh lets stored fields win
+over the environment, so this is the configuration pi's startup refresh
+resolves too. Without a stored credential, the environment alone names the
+configuration. A credential that lacks an endpoint of its own counts as none
+for a run that names a model, which keeps the environment's own key and
+endpoint. On any other start such a credential sends nothing.
+`index.ts` reads the credential with pi's exported `readStoredCredential()`,
+which leaves the key as written. When pi reads a key itself, it runs one
+that starts with `!` as a shell command and expands `$NAME` in others. The
+extension does neither, so such a key counts as no stored credential.
+
+The fetch is skipped when `PI_OFFLINE` is set. A failed fetch leaves the
+catalog empty without failing the extension load. The fetch is also skipped
+when pi's cache would restore a catalog for that endpoint that lists the
+exact model ID, or any catalog for it when argv names no model. pi exports no
+reader for its models store, so `index.ts` reads `models-store.json` in
+`getAgentDir()` itself. A file it cannot read or parse counts as no cache,
+which costs only the fetch. A run that names a model cannot start without
+the catalog and keeps the full request budget. Any other start gives the
+fetch `STARTUP_CATALOG_BUDGET_MS`, because failing leaves pi where it would
+have started anyway. Both files are read from the CLI's agent dir, which an
+SDK host that passes its own credential or models store does not use.
 
 **`pendingCatalog` is cleared only by a matching publish.** Login and
 `primeCatalog()` install the fetched catalog in memory and stage it for
@@ -216,7 +239,7 @@ superseded refresh belongs inside `update`, not before the publish call.
 - **Print mode and `--list-models` never refresh.** pi restores the saved
   catalog at startup without network, and only interactive mode, RPC mode,
   and `/login` fetch a new one. The one fetch outside those is the
-  extension's own `primeCatalog()` for a `--model` run, described above.
+  extension's own `primeCatalog()` while pi loads, described above.
   When the key and endpoint come only from the environment, pi's startup
   can also select no model in `pi -p` without `--model`: the refresh that
   native provider registration starts races the one startup awaits. A

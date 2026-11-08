@@ -351,15 +351,25 @@ interactive deadline.
 - Cancellation stops active fetches, response reads, and retry delays.
 - Failed refresh never replaces a previously accepted generation.
 - A cached generation is restored only for the exact active base URL.
-- pi resolves `--provider actualyze --model <id>` (or `--model actualyze/<id>`)
-  before its own network refresh. When the environment names the key and the
-  endpoint, and pi's cache has no catalog for that endpoint listing `<id>`, a
-  run started that way fetches the catalog while pi loads the extension. The
-  first run then works with nothing cached, and the catalog is stored for later
-  runs. Until the fetch ends, pi waits before it starts, for at most the
-  10-second catalog budget when the endpoint does not answer. A model pattern
-  that is not an exact ID, such as one with a `:high` thinking suffix, always
-  fetches. `--offline` skips the fetch.
+- pi chooses the starting model from its saved catalog before its own network
+  refresh. It resolves `--provider actualyze --model <id>` (or
+  `--model actualyze/<id>`) the same way. When nothing is saved for the
+  endpoint, the extension fetches the catalog while pi loads it. pi saves that
+  catalog for later runs, so a first run can start on an Actualyze model with
+  nothing cached.
+- With a saved login, a start fetches this way when no catalog is saved for the
+  login's endpoint, or when the run names a model that catalog lacks. The fetch
+  uses the login's key and goes only to the endpoint saved with it.
+- Without a saved login, only a run that names an Actualyze model fetches this
+  way, with the key and endpoint the environment names, when pi's cache lacks
+  `<id>` for that endpoint. A model pattern that is not an exact ID, such as
+  one with a `:high` thinking suffix, always fetches. A saved login counts as
+  none here when it has no endpoint of its own, or when pi runs its key as a
+  command (`!`) or expands it from the environment (`$NAME`).
+- A run that names an Actualyze model cannot start without the catalog, so pi
+  waits up to the 10-second catalog budget for it. Any other start waits at
+  most 3 seconds and then goes on as it would have without the catalog.
+  `--offline` skips the fetch.
 - Same-target key rotation persists the newly validated login catalog instead of
   restoring the previous key's catalog.
 
@@ -499,6 +509,8 @@ Authenticated traffic is deliberately constrained:
 
 - a key from the environment goes only to an endpoint the environment names, and
   production is a default only for `/login`, whose prompt names the host;
+- the catalog fetch while pi loads sends a saved login's key only to the
+  endpoint saved with that login;
 - targets are one validated ASCII DNS label;
 - a base URL is an absolute URL without credentials, query, or fragment;
 - all requests must use HTTPS, except plain HTTP to a `localhost`, `127.0.0.1`,
@@ -535,7 +547,8 @@ explicit opt-in flags.
 The provider is designed to fail without corrupting a valid catalog:
 
 - **Aggregate request budget:** 10 seconds for list discovery, including retries,
-  body reads, and backoff.
+  body reads and backoff. The fetch while pi loads gets 3 seconds when the run
+  names no Actualyze model.
 - **Retry scope:** HTTP 429 and transient 5xx responses only.
 - **Retry delay:** `Retry-After` when valid and affordable within the deadline;
   otherwise bounded exponential backoff.
@@ -562,14 +575,15 @@ The provider is designed to fail without corrupting a valid catalog:
 
 ### Print Mode and Model Listing
 
-`pi -p` and `pi --list-models` use the saved model list and never fetch it from
-Actualyze. pi fetches the list on `/login actualyze`, after interactive pi starts,
-and when `/model` opens. The one exception is a run that names an Actualyze model
-with `--model`, which fetches the list while pi loads the extension (see
-[Refresh and Cache Behavior](#refresh-and-cache-behavior)). Without `--model`, a
-new environment that sets the key and endpoint through environment variables and
-has no saved list therefore shows no Actualyze models in these modes. Start
-interactive pi once, or run `/login actualyze`, to save the list.
+In `pi -p` and `pi --list-models`, pi uses the saved model list and never fetches
+it from Actualyze. pi fetches the list on `/login actualyze`, after interactive pi
+starts and when `/model` opens. The extension also fetches it while pi loads
+when nothing is saved for the endpoint, for a saved login or for a run that names
+an Actualyze model with `--model` (see
+[Refresh and Cache Behavior](#refresh-and-cache-behavior)). Without either, a new
+environment that sets the key and endpoint through environment variables and has
+no saved list shows no Actualyze models in these modes. Start interactive pi
+once, or run `/login actualyze`, to save the list.
 
 When the key and endpoint come only from environment variables, `pi -p` without
 `--model` sometimes starts with no model selected and reports "No API key found
@@ -640,8 +654,8 @@ the extension loads. Check that:
 - a first run is not started with `--offline`; and
 - the endpoint accepts the key: `/login actualyze` reports the error.
 
-A saved login stores its catalog when you log in. If that cache is gone, start
-pi once without `--model` and open `/model`, which refreshes it.
+A saved login stores its catalog when you log in. If that cache is gone, the
+next start fetches it again.
 
 ### Login returns an authentication or catalog error
 
@@ -658,7 +672,9 @@ The provider intentionally rejects redirects and non-JSON responses.
 
 ### Models do not appear in `--list-models` or `pi -p`
 
-These modes show only the saved model list. Start interactive pi once, or run
+These modes show only the saved model list. With a saved login, the extension
+fetches it while pi loads when none is saved, so check that the login's endpoint
+answers within 3 seconds. Otherwise start interactive pi once, or run
 `/login actualyze`, to fetch and save it. See
 [Print Mode and Model Listing](#print-mode-and-model-listing).
 
