@@ -54,14 +54,14 @@
 		"@earendil-works/pi-coding-agent": ">=1.0.0"
 	},
 	"devDependencies": {
-		"@biomejs/biome": "2.5.15",
+		"@biomejs/biome": "2.6.4",
 		"@earendil-works/pi-ai": "1.4.0",
 		"@earendil-works/pi-coding-agent": "1.4.0",
 		"@types/node": "22.20.5",
 		"husky": "9.1.7",
 		"lint-staged": "17.6.0",
 		"typescript": "7.0.2",
-		"vitest": "5.0.5"
+		"vitest": "5.1.0"
 	},
 	"overrides": {
 		"@earendil-works/pi-coding-agent@1.4.0": {
